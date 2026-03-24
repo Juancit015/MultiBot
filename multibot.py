@@ -21,7 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 2000
+LIMITE_MB  = 50  # API oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -426,12 +426,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             duration_s = meta.get('duration')
             dur_str = f"{int(duration_s//60)}:{int(duration_s%60):02d}" if duration_s else "?"
             await safe_edit(msg,
-                f"Video demasiado grande para Telegram.\n"
-                f"Tamaño: {size_mb:.1f} MB | Duración: {dur_str}"
+                f"⚠️ Video demasiado grande para Telegram.\n"
+                f"Tamaño: {size_mb:.1f} MB | Duración: {dur_str}\n"
+                f"El límite de la API de Telegram es 50 MB."
             )
             return
 
-        timeout_s = max(120, int(size_mb * 10))
+        timeout_s = max(60, int(size_mb * 3))
 
         try:
             with open(mp4s[0], 'rb') as f:
@@ -456,14 +457,14 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_audio(
                         f, title=f"{title} (Audio)",
                         reply_to_message_id=reply_id,
-                        read_timeout=120, write_timeout=120
+                        read_timeout=60, write_timeout=60
                     )
             except Exception:
                 with open(mp3s[0], 'rb') as f:
                     await context.bot.send_audio(
                         chat_id=update.effective_chat.id,
                         audio=f, title=f"{title} (Audio)",
-                        read_timeout=120, write_timeout=120
+                        read_timeout=60, write_timeout=60
                     )
 
         await safe_delete(msg)
@@ -489,8 +490,11 @@ def main():
     logger.info("yt-dlp actualizado.")
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
-    app = Application.builder().token(TOKEN).base_url("https://api-production-87d4e.up.railway.app/bot").request(req).concurrent_updates(True).build()
+
+    # API oficial de Telegram (sin base_url personalizado)
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=60, connect_timeout=30, pool_timeout=30)
+    app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_media))
