@@ -21,7 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 50  # API oficial de Telegram
+LIMITE_MB  = 2000
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -491,9 +491,9 @@ def main():
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
 
-    # API oficial de Telegram (sin base_url personalizado)
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=60, connect_timeout=30, pool_timeout=30)
-    app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
+    # API Perzonalizada 2GB!!! :0
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
+    app = Application.builder().token(TOKEN).base_url("https://api-production-87d4e.up.railway.app/bot").request(req).concurrent_updates(True).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
