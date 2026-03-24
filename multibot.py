@@ -432,7 +432,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        timeout_s = max(60, int(size_mb * 3))
+        timeout_s = max(120, int(size_mb * 10))
 
         try:
             with open(mp4s[0], 'rb') as f:
