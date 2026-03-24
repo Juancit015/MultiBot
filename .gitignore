@@ -1,0 +1,7 @@
+downloads/*
+!downloads/.gitkeep
+*.mp4
+*.mp3
+*.m4a
+*.part
+test.mp4
