@@ -111,9 +111,9 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
     if mode == "video":
         if platform == 'youtube':
-            # YouTube tiene opciones más limitadas, usar formato flexible
+            # YouTube: intenta 720p → ≤720p → 360p muxed → mejor disponible
             opts.update({
-                'format': 'best[height<=720]/best',
+                'format': 'best[height=720]/best[height<=720]/18/best',
                 'merge_output_format': 'mp4',
                 'postprocessors': [
                     {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
