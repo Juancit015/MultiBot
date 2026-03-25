@@ -91,51 +91,29 @@ def limpiar_url(text: str) -> str:
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
-    # SoundCloud y audio necesitan más tiempo
-    socket_timeout = 120 if platform in ('soundcloud',) or mode == "audio" else 60
+    # Opciones básicas - evitar exceso de config que causa bucles
     opts = {
-        'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'retries': 5, 'fragment_retries': 5, 'socket_timeout': socket_timeout,
-        'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
-        'restrictfilenames': True,
-        'trim_file_name': 50,
+        'format': 'best[height<=1080]/best' if platform == 'youtube' or mode == 'video' else 'bestaudio/best',
+        'outtmpl': str(folder / '%(id)s.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4' if mode == 'video' else None,
+        'socket_timeout': 60,
     }
-    if platform == 'instagram' and COOKIES_IG.exists():
+    
+    # Remover valores None
+    opts = {k: v for k, v in opts.items() if v is not None}
+    
+    # Cookies si existen
+    if platform == 'youtube' and COOKIES_YT.exists():
+        opts['cookiefile'] = str(COOKIES_YT)
+    elif platform == 'instagram' and COOKIES_IG.exists():
         opts['cookiefile'] = str(COOKIES_IG)
     elif platform == 'tiktok' and COOKIES_TT.exists():
         opts['cookiefile'] = str(COOKIES_TT)
     elif platform == 'facebook' and COOKIES_FB.exists():
         opts['cookiefile'] = str(COOKIES_FB)
-    elif platform == 'youtube' and COOKIES_YT.exists():
-        opts['cookiefile'] = str(COOKIES_YT)
-
-    if mode == "video":
-        if platform == 'youtube':
-            # YouTube: formato simple como el bot3.py que funcionaba
-            opts.update({
-                'format': 'best[height<=1080]/best',
-                'merge_output_format': 'mp4',
-                'no_warnings': True,
-            })
-        else:
-            opts.update({
-                'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                'merge_output_format': 'mp4',
-                'postprocessors': [
-                    {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
-                    {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
-                     'preferredquality': '128', 'nopostoverwrites': True},
-                ],
-                'postprocessor_args': {
-                    'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
-                },
-                'keepvideo': True,
-            })
-    else:
-        opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}],
-        })
+    
     return opts
 
 
@@ -187,26 +165,35 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
-    # SoundCloud y YouTube necesitan más reintentos por los timeouts
     is_soundcloud = 'soundcloud.com' in url
     is_youtube = 'youtube.com' in url or 'youtu.be' in url
-    actual_retries = 5 if (is_soundcloud or is_youtube) else max_retries
+    actual_retries = 3  # Reducido para YouTube también
     for attempt in range(1, actual_retries + 1):
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return await asyncio.to_thread(ydl.extract_info, url, download=True)
+            async def download_task():
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return await asyncio.to_thread(ydl.extract_info, url, download=True)
+            
+            # Timeout máximo de 5 minutos por intento
+            result = await asyncio.wait_for(download_task(), timeout=300)
+            return result
+            
+        except asyncio.TimeoutError:
+            last_error = TimeoutError("Descarga excedió 5 minutos")
+            logger.warning(f"Intento {attempt}/{actual_retries} - Timeout: descarga muy lenta")
         except Exception as e:
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # Si hay error de cookies/autenticación, reintentar sin cookies
-            if ('does not look like a Netscape' in err or 'cookies' in err.lower() or 'Sign in to confirm' in err) and 'cookiefile' in opts:
+            if ('does not look like a Netscape' in err or 'Sign in to confirm' in err) and 'cookiefile' in opts:
                 logger.info(f"Reintentando sin cookies...")
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
-            if attempt < actual_retries:
-                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
-                await asyncio.sleep(wait_time)
+        
+        if attempt < actual_retries:
+            wait_time = 2 * attempt
+            await asyncio.sleep(wait_time)
+    
     raise last_error
 
 
@@ -565,7 +552,9 @@ def main():
     os.system("pip install -U yt-dlp --quiet")
     logger.info("yt-dlp actualizado.")
 
-    Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
+    # Flask deshabilitado - puede interferir con polling de Telegram
+    # Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
+    
     req = HTTPXRequest(connection_pool_size=8, read_timeout=600, write_timeout=600, connect_timeout=30, pool_timeout=60)
     app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
