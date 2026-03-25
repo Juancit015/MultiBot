@@ -21,6 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
+COOKIES_YT = Path(__file__).parent / "cookies_yt.txt"
 LIMITE_MB  = 50 #Soportado por la api oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -105,6 +106,8 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
         opts['cookiefile'] = str(COOKIES_TT)
     elif platform == 'facebook' and COOKIES_FB.exists():
         opts['cookiefile'] = str(COOKIES_FB)
+    elif platform == 'youtube' and COOKIES_YT.exists():
+        opts['cookiefile'] = str(COOKIES_YT)
 
     if mode == "video":
         opts.update({
@@ -176,9 +179,10 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
-    # SoundCloud necesita más reintentos por los timeouts
+    # SoundCloud y YouTube necesitan más reintentos por los timeouts
     is_soundcloud = 'soundcloud.com' in url
-    actual_retries = 5 if is_soundcloud else max_retries
+    is_youtube = 'youtube.com' in url or 'youtu.be' in url
+    actual_retries = 5 if (is_soundcloud or is_youtube) else max_retries
     for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -510,7 +514,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=timeout_s
                 )
 
-        if mp3s and platform != 'youtube':
+        if mp3s and platform != 'youtuyabe':
             try:
                 with open(mp3s[0], 'rb') as f:
                     await update.message.reply_audio(
