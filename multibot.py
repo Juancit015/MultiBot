@@ -56,6 +56,7 @@ RE_PATTERNS = {
     'tiktok':    r'https?://(?:www\.|vm\.|vt\.)?tiktok\.com/[^\s]+',
     'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
+    'soundcloud': r'https?://(?:www\.)?soundcloud\.com/[^\s]+',
 }
 
 
@@ -88,9 +89,11 @@ def limpiar_url(text: str) -> str:
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
+    # SoundCloud y audio necesitan más tiempo
+    socket_timeout = 120 if platform in ('soundcloud',) or mode == "audio" else 60
     opts = {
         'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'retries': 5, 'fragment_retries': 5, 'socket_timeout': 60,
+        'retries': 5, 'fragment_retries': 5, 'socket_timeout': socket_timeout,
         'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
         'restrictfilenames': True,
         'trim_file_name': 50,
@@ -144,7 +147,7 @@ def build_title(views=None, likes=None, channel=None, uploader=None, description
 
 async def fetch_bytes(url: str) -> bytes | None:
     try:
-        return await asyncio.to_thread(lambda: requests.get(url, timeout=15).content)
+        return await asyncio.to_thread(lambda: requests.get(url, timeout=30).content)
     except Exception as e:
         logger.warning(f"fetch_bytes error: {e}")
 
@@ -172,19 +175,23 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
-    for attempt in range(1, max_retries + 1):
+    # SoundCloud necesita más reintentos por los timeouts
+    is_soundcloud = 'soundcloud.com' in url
+    actual_retries = 5 if is_soundcloud else max_retries
+    for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return await asyncio.to_thread(ydl.extract_info, url, download=True)
         except Exception as e:
             last_error = e
             err = str(e)
-            logger.warning(f"Intento {attempt}/{max_retries} fallido: {err[:120]}")
+            logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
-            if attempt < max_retries:
-                await asyncio.sleep(2 * attempt)
+            if attempt < actual_retries:
+                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
+                await asyncio.sleep(wait_time)
     raise last_error
 
 
@@ -204,7 +211,7 @@ async def safe_edit(msg, text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hola! Envíame un enlace de TikTok, Instagram o Facebook.\n"
+        "Hola! Envíame un enlace de TikTok, Instagram, Facebook o SoundCloud.\n"
         "Escribe find <cancion> para buscar en SoundCloud.\n"
         "Usa /wiki <consulta> para buscar información."
     )
@@ -307,6 +314,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if platform == 'facebook':
         url = convertir_url_facebook(url)
+    elif platform == 'soundcloud':
+        # Resolver URL corta si es necesario
+        url = await resolve_short_url(url)
 
     msg = await update.message.reply_text("Procesando...", reply_to_message_id=reply_id)
     folder = BASE_DIR / uuid.uuid4().hex
@@ -386,6 +396,52 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(msg, "No se pudo descargar el carrusel. Intenta en unos minutos.")
                 return
 
+        if platform == 'soundcloud':
+            logger.info(f"Descargando SoundCloud: {url}")
+            try:
+                # Descargar el audio con metadata
+                opts = make_opts(folder, mode="audio", platform=platform)
+                meta = await download_with_retry(url, opts)
+                
+                mp3s = list(folder.glob("*.mp3"))
+                if not mp3s:
+                    await safe_edit(msg, "❌ No se pudo descargar el audio de SoundCloud.")
+                    return
+                
+                title = meta.get('title', 'Track')
+                artist = meta.get('uploader', 'Unknown Artist')
+                thumbnail_url = meta.get('thumbnail')
+                
+                # Enviar portada si existe
+                if thumbnail_url:
+                    thumb_bytes = await fetch_bytes(thumbnail_url)
+                    if thumb_bytes:
+                        caption = f"🎵 {title}\n👤 {artist}"
+                        await update.message.reply_photo(
+                            thumb_bytes,
+                            caption=caption,
+                            reply_to_message_id=reply_id
+                        )
+                
+                # Enviar audio
+                with open(mp3s[0], 'rb') as f:
+                    await update.message.reply_audio(
+                        f,
+                        title=title,
+                        performer=artist,
+                        reply_to_message_id=reply_id,
+                        read_timeout=120,
+                        write_timeout=120
+                    )
+                
+                await safe_delete(msg)
+                return
+                
+            except Exception as e:
+                logger.error(f"SoundCloud download error: {e}")
+                await safe_edit(msg, "❌ Error al descargar de SoundCloud. Intenta de nuevo.")
+                return
+        
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
