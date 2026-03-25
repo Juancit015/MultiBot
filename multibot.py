@@ -110,19 +110,33 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
         opts['cookiefile'] = str(COOKIES_YT)
 
     if mode == "video":
-        opts.update({
-            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'postprocessors': [
-                {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
-                {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
-                 'preferredquality': '128', 'nopostoverwrites': True},
-            ],
-            'postprocessor_args': {
-                'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
-            },
-            'keepvideo': True,
-        })
+        if platform == 'youtube':
+            # YouTube tiene opciones más limitadas, usar formato flexible
+            opts.update({
+                'format': 'best[height<=720]/best',
+                'merge_output_format': 'mp4',
+                'postprocessors': [
+                    {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
+                ],
+                'postprocessor_args': {
+                    'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
+                },
+                'keepvideo': False,
+            })
+        else:
+            opts.update({
+                'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+                'merge_output_format': 'mp4',
+                'postprocessors': [
+                    {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
+                    {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
+                     'preferredquality': '128', 'nopostoverwrites': True},
+                ],
+                'postprocessor_args': {
+                    'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
+                },
+                'keepvideo': True,
+            })
     else:
         opts.update({
             'format': 'bestaudio/best',
@@ -514,7 +528,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=timeout_s
                 )
 
-        if mp3s and platform != 'youtuyabe':
+        if mp3s and platform != 'youtube':
             try:
                 with open(mp3s[0], 'rb') as f:
                     await update.message.reply_audio(
