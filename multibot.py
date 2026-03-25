@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN        = os.environ.get("BOT_TOKEN", "***CLEARED***")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
-BASE_DIR     = Path("downloads")
+BASE_DIR     = Path("/tmp/multibot_downloads")
 BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
@@ -111,14 +111,11 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
     if mode == "video":
         if platform == 'youtube':
-            # YouTube: solo UN formato (no múltiples) para evitar descargas paralelas
-            # Prioriza muxed (video+audio juntos) sobre DASH (separado)
+            # YouTube: formato simple como el bot3.py que funcionaba
             opts.update({
-                'format': '18/best[ext=mp4][height<=720]/best[height<=720]/best',
-                'fragment_retries': 1,
-                'skip_unavailable_fragments': False,
-                'nopart': True,  # No fragmentos temporales
-                'concurrent_fragment_downloads': 1,  # Solo 1 descarga a la vez
+                'format': 'best[height<=1080]/best',
+                'merge_output_format': 'mp4',
+                'no_warnings': True,
             })
         else:
             opts.update({
@@ -508,13 +505,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        timeout_s = max(120, int(size_mb * 5))
+        # Timeouts basado en tamaño del archivo (como bot3.py)
+        timeout_s = max(300, int(size_mb * 10))
 
         try:
             with open(mp4s[0], 'rb') as f:
                 await update.message.reply_video(
                     f, caption=title,
                     reply_to_message_id=reply_id,
+                    supports_streaming=True,
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
@@ -523,6 +522,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
                     video=f, caption=title,
+                    supports_streaming=True,
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
@@ -566,7 +566,7 @@ def main():
     logger.info("yt-dlp actualizado.")
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=180, write_timeout=180, connect_timeout=30, pool_timeout=60)
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=600, write_timeout=600, connect_timeout=30, pool_timeout=60)
     app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
