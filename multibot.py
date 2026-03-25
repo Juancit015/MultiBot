@@ -16,12 +16,11 @@ logger = logging.getLogger(__name__)
 
 TOKEN        = os.environ.get("BOT_TOKEN", "***CLEARED***")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
-BASE_DIR     = Path("/tmp/multibot_downloads")
+BASE_DIR     = Path("downloads")
 BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-COOKIES_YT = Path(__file__).parent / "cookies_yt.txt"
 LIMITE_MB  = 50 #Soportado por la api oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -58,7 +57,6 @@ RE_PATTERNS = {
     'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
     'soundcloud': r'https?://(?:www\.)?soundcloud\.com/[^\s]+',
-    'youtube':   r'https?://(?:www\.|m\.)?(?:youtube\.com|youtu\.be)/[^\s]+',
 }
 
 
@@ -91,29 +89,41 @@ def limpiar_url(text: str) -> str:
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
-    # Opciones básicas - evitar exceso de config que causa bucles
+    # SoundCloud y audio necesitan más tiempo
+    socket_timeout = 120 if platform in ('soundcloud',) or mode == "audio" else 60
     opts = {
-        'format': 'best[height<=1080]/best' if platform == 'youtube' or mode == 'video' else 'bestaudio/best',
-        'outtmpl': str(folder / '%(id)s.%(ext)s'),
-        'quiet': True,
-        'no_warnings': True,
-        'merge_output_format': 'mp4' if mode == 'video' else None,
-        'socket_timeout': 60,
+        'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
+        'retries': 5, 'fragment_retries': 5, 'socket_timeout': socket_timeout,
+        'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
+        'restrictfilenames': True,
+        'trim_file_name': 50,
     }
-    
-    # Remover valores None
-    opts = {k: v for k, v in opts.items() if v is not None}
-    
-    # Cookies si existen
-    if platform == 'youtube' and COOKIES_YT.exists():
-        opts['cookiefile'] = str(COOKIES_YT)
-    elif platform == 'instagram' and COOKIES_IG.exists():
+    if platform == 'instagram' and COOKIES_IG.exists():
         opts['cookiefile'] = str(COOKIES_IG)
     elif platform == 'tiktok' and COOKIES_TT.exists():
         opts['cookiefile'] = str(COOKIES_TT)
     elif platform == 'facebook' and COOKIES_FB.exists():
         opts['cookiefile'] = str(COOKIES_FB)
-    
+
+    if mode == "video":
+        opts.update({
+            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'postprocessors': [
+                {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
+                {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
+                 'preferredquality': '128', 'nopostoverwrites': True},
+            ],
+            'postprocessor_args': {
+                'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
+            },
+            'keepvideo': True,
+        })
+    else:
+        opts.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}],
+        })
     return opts
 
 
@@ -165,35 +175,23 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
+    # SoundCloud necesita más reintentos por los timeouts
     is_soundcloud = 'soundcloud.com' in url
-    is_youtube = 'youtube.com' in url or 'youtu.be' in url
-    actual_retries = 3  # Reducido para YouTube también
+    actual_retries = 5 if is_soundcloud else max_retries
     for attempt in range(1, actual_retries + 1):
         try:
-            async def download_task():
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    return await asyncio.to_thread(ydl.extract_info, url, download=True)
-            
-            # Timeout máximo de 5 minutos por intento
-            result = await asyncio.wait_for(download_task(), timeout=300)
-            return result
-            
-        except asyncio.TimeoutError:
-            last_error = TimeoutError("Descarga excedió 5 minutos")
-            logger.warning(f"Intento {attempt}/{actual_retries} - Timeout: descarga muy lenta")
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return await asyncio.to_thread(ydl.extract_info, url, download=True)
         except Exception as e:
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            if ('does not look like a Netscape' in err or 'Sign in to confirm' in err) and 'cookiefile' in opts:
-                logger.info(f"Reintentando sin cookies...")
+            if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
-        
-        if attempt < actual_retries:
-            wait_time = 2 * attempt
-            await asyncio.sleep(wait_time)
-    
+            if attempt < actual_retries:
+                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
+                await asyncio.sleep(wait_time)
     raise last_error
 
 
@@ -213,7 +211,7 @@ async def safe_edit(msg, text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hola! Envíame un enlace de TikTok, Instagram, Facebook, YouTube o SoundCloud.\n"
+        "Hola! Envíame un enlace de TikTok, Instagram, Facebook o SoundCloud.\n"
         "Escribe find <cancion> para buscar en SoundCloud.\n"
         "Usa /wiki <consulta> para buscar información."
     )
@@ -448,15 +446,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
         description = meta.get('description', '').strip()
-        video_title = meta.get('title', 'Video')
 
         es_story_ig = (platform == 'instagram' and '/stories/' in url)
         es_story_tt = (platform == 'tiktok' and ('story_type=1' in url or 'story_uid' in url))
 
         if es_story_ig or es_story_tt:
             title = f"Story by @{uploader}" if uploader else "Story"
-        elif platform == 'youtube':
-            title = f"✅ {video_title}"
         elif platform in ('instagram', 'tiktok'):
             title = build_title(
                 views=meta.get('view_count'),
@@ -472,7 +467,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 channel=meta.get('channel'),
                 uploader=uploader,
                 description=description,
-                title=video_title,
+                title=meta.get('title'),
             )
 
         mp4s = list(folder.glob("*.mp4"))
@@ -492,15 +487,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Timeouts basado en tamaño del archivo (como bot3.py)
-        timeout_s = max(300, int(size_mb * 10))
+        timeout_s = max(60, int(size_mb * 3))
 
         try:
             with open(mp4s[0], 'rb') as f:
                 await update.message.reply_video(
                     f, caption=title,
                     reply_to_message_id=reply_id,
-                    supports_streaming=True,
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
@@ -509,12 +502,11 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
                     video=f, caption=title,
-                    supports_streaming=True,
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
 
-        if mp3s and platform != 'youtube':
+        if mp3s:
             try:
                 with open(mp3s[0], 'rb') as f:
                     await update.message.reply_audio(
@@ -552,10 +544,8 @@ def main():
     os.system("pip install -U yt-dlp --quiet")
     logger.info("yt-dlp actualizado.")
 
-    # Flask deshabilitado - puede interferir con polling de Telegram
-    # Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
-    
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=600, write_timeout=600, connect_timeout=30, pool_timeout=60)
+    Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=60, connect_timeout=30, pool_timeout=30)
     app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
