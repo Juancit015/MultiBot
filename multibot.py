@@ -112,16 +112,12 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     if mode == "video":
         if platform == 'youtube':
             # YouTube: intenta 720p → ≤720p → 360p muxed → mejor disponible
+            # Sin postprocessadores: formato 18 ya viene en MP4 listo
             opts.update({
                 'format': 'best[height=720]/best[height<=720]/18/best',
-                'merge_output_format': 'mp4',
-                'postprocessors': [
-                    {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
-                ],
-                'postprocessor_args': {
-                    'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
-                },
-                'keepvideo': False,
+                'fragment_retries': 3,
+                'skip_unavailable_fragments': True,
+                'http_chunk_size': 10485760,  # 10MB chunks para VPS
             })
         else:
             opts.update({
@@ -509,7 +505,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        timeout_s = max(60, int(size_mb * 3))
+        timeout_s = max(120, int(size_mb * 5))
 
         try:
             with open(mp4s[0], 'rb') as f:
@@ -567,7 +563,7 @@ def main():
     logger.info("yt-dlp actualizado.")
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=60, connect_timeout=30, pool_timeout=30)
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=180, write_timeout=180, connect_timeout=30, pool_timeout=60)
     app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
