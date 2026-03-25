@@ -201,7 +201,9 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
+            # Si hay error de cookies/autenticación, reintentar sin cookies
+            if ('does not look like a Netscape' in err or 'cookies' in err.lower() or 'Sign in to confirm' in err) and 'cookiefile' in opts:
+                logger.info(f"Reintentando sin cookies...")
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
             if attempt < actual_retries:
