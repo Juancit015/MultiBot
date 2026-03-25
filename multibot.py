@@ -111,13 +111,14 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
     if mode == "video":
         if platform == 'youtube':
-            # YouTube: intenta 720p → ≤720p → 360p muxed → mejor disponible
-            # Sin postprocessadores: formato 18 ya viene en MP4 listo
+            # YouTube: solo UN formato (no múltiples) para evitar descargas paralelas
+            # Prioriza muxed (video+audio juntos) sobre DASH (separado)
             opts.update({
-                'format': 'best[height=720]/best[height<=720]/18/best',
-                'fragment_retries': 3,
-                'skip_unavailable_fragments': True,
-                'http_chunk_size': 10485760,  # 10MB chunks para VPS
+                'format': '18/best[ext=mp4][height<=720]/best[height<=720]/best',
+                'fragment_retries': 1,
+                'skip_unavailable_fragments': False,
+                'nopart': True,  # No fragmentos temporales
+                'concurrent_fragment_downloads': 1,  # Solo 1 descarga a la vez
             })
         else:
             opts.update({
