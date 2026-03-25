@@ -57,6 +57,7 @@ RE_PATTERNS = {
     'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
     'soundcloud': r'https?://(?:www\.)?soundcloud\.com/[^\s]+',
+    'youtube':   r'https?://(?:www\.|m\.)?(?:youtube\.com|youtu\.be)/[^\s]+',
 }
 
 
@@ -211,7 +212,7 @@ async def safe_edit(msg, text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hola! Envíame un enlace de TikTok, Instagram, Facebook o SoundCloud.\n"
+        "Hola! Envíame un enlace de TikTok, Instagram, Facebook, YouTube o SoundCloud.\n"
         "Escribe find <cancion> para buscar en SoundCloud.\n"
         "Usa /wiki <consulta> para buscar información."
     )
@@ -446,12 +447,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
         description = meta.get('description', '').strip()
+        video_title = meta.get('title', 'Video')
 
         es_story_ig = (platform == 'instagram' and '/stories/' in url)
         es_story_tt = (platform == 'tiktok' and ('story_type=1' in url or 'story_uid' in url))
 
         if es_story_ig or es_story_tt:
             title = f"Story by @{uploader}" if uploader else "Story"
+        elif platform == 'youtube':
+            title = f"✅ {video_title}"
         elif platform in ('instagram', 'tiktok'):
             title = build_title(
                 views=meta.get('view_count'),
@@ -467,7 +471,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 channel=meta.get('channel'),
                 uploader=uploader,
                 description=description,
-                title=meta.get('title'),
+                title=video_title,
             )
 
         mp4s = list(folder.glob("*.mp4"))
@@ -506,7 +510,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=timeout_s
                 )
 
-        if mp3s:
+        if mp3s and platform != 'youtube':
             try:
                 with open(mp3s[0], 'rb') as f:
                     await update.message.reply_audio(
