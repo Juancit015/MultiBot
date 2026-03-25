@@ -21,7 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 2000
+LIMITE_MB  = 50 #Soportado por la api oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -431,7 +431,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        timeout_s = max(120, int(size_mb * 10))
+        timeout_s = max(60, int(size_mb * 3))
 
         try:
             with open(mp4s[0], 'rb') as f:
