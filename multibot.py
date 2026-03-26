@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """Eres un asistente de consultas informativas y enciclopédicas
 
 RE_PATTERNS = {
     'tiktok':    r'https?://(?:www\.|vm\.|vt\.)?tiktok\.com/[^\s]+',
-    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
+    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reels?|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
     'soundcloud': r'https?://(?:www\.)?soundcloud\.com/[^\s]+',
 }
@@ -176,6 +176,15 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
     last_error = None
     is_soundcloud = 'soundcloud.com' in url
     actual_retries = 5 if is_soundcloud else max_retries
+    # Obtener metadata sin descargar para tener título/stats aunque falle el postprocesado
+    meta_cache = {}
+    try:
+        info_opts = {k: v for k, v in opts.items()}
+        info_opts['skip_download'] = True
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
+    except Exception:
+        pass
     for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -185,10 +194,10 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
             # FIX: si el error es de postprocesado (ffprobe) el video YA se descargó
-            # no tiene sentido reintentar, salimos del loop
+            # retornamos la metadata cacheada para conservar título y stats
             if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
-                logger.warning("Error de postprocesado ffprobe — video descargado, ignorando error de audio")
-                return {}  # retornamos dict vacío para que el código busque el mp4
+                logger.warning("Error de postprocesado ffprobe — video descargado, usando metadata cacheada")
+                return meta_cache
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
