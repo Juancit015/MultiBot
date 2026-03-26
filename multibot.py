@@ -490,7 +490,7 @@ def main():
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
     req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
-    app = Application.builder().token(TOKEN).base_url("multi-api-production.up.railway.app").request(req).concurrent_updates(True).build()
+    app = Application.builder().token(TOKEN).base_url("https://multi-api-production.up.railway.app/bot").request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_media))
