@@ -14,7 +14,7 @@ import yt_dlp
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN        = os.environ.get("BOT_TOKEN", "***CLEARED***")
+TOKEN        = os.environ.get("BOT_TOKEN","***CLEARED***")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
 BASE_DIR     = Path("downloads")
 BASE_DIR.mkdir(exist_ok=True)
@@ -54,9 +54,8 @@ SYSTEM_PROMPT = """Eres un asistente de consultas informativas y enciclopédicas
 
 RE_PATTERNS = {
     'tiktok':    r'https?://(?:www\.|vm\.|vt\.)?tiktok\.com/[^\s]+',
-    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reels?|tv|stories)/[^\s]+',
+    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
-    'soundcloud': r'https?://(?:www\.)?soundcloud\.com/[^\s]+',
 }
 
 
@@ -89,10 +88,9 @@ def limpiar_url(text: str) -> str:
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
-    socket_timeout = 120 if platform == 'soundcloud' or mode == "audio" else 60
     opts = {
         'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'retries': 5, 'fragment_retries': 5, 'socket_timeout': socket_timeout,
+        'retries': 5, 'fragment_retries': 5, 'socket_timeout': 60,
         'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
         'restrictfilenames': True,
         'trim_file_name': 50,
@@ -146,7 +144,7 @@ def build_title(views=None, likes=None, channel=None, uploader=None, description
 
 async def fetch_bytes(url: str) -> bytes | None:
     try:
-        return await asyncio.to_thread(lambda: requests.get(url, timeout=30).content)
+        return await asyncio.to_thread(lambda: requests.get(url, timeout=15).content)
     except Exception as e:
         logger.warning(f"fetch_bytes error: {e}")
 
@@ -174,36 +172,19 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
-    is_soundcloud = 'soundcloud.com' in url
-    actual_retries = 5 if is_soundcloud else max_retries
-    # Obtener metadata sin descargar para tener título/stats aunque falle el postprocesado
-    meta_cache = {}
-    try:
-        info_opts = {k: v for k, v in opts.items()}
-        info_opts['skip_download'] = True
-        with yt_dlp.YoutubeDL(info_opts) as ydl:
-            meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
-    except Exception:
-        pass
-    for attempt in range(1, actual_retries + 1):
+    for attempt in range(1, max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return await asyncio.to_thread(ydl.extract_info, url, download=True)
         except Exception as e:
             last_error = e
             err = str(e)
-            logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # FIX: si el error es de postprocesado (ffprobe) el video YA se descargó
-            # retornamos la metadata cacheada para conservar título y stats
-            if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
-                logger.warning("Error de postprocesado ffprobe — video descargado, usando metadata cacheada")
-                return meta_cache
+            logger.warning(f"Intento {attempt}/{max_retries} fallido: {err[:120]}")
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
-            if attempt < actual_retries:
-                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
-                await asyncio.sleep(wait_time)
+            if attempt < max_retries:
+                await asyncio.sleep(2 * attempt)
     raise last_error
 
 
@@ -223,7 +204,7 @@ async def safe_edit(msg, text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hola! Envíame un enlace de TikTok, Instagram, Facebook o SoundCloud.\n"
+        "Hola! Envíame un enlace de TikTok, Instagram o Facebook.\n"
         "Escribe find <cancion> para buscar en SoundCloud.\n"
         "Usa /wiki <consulta> para buscar información."
     )
@@ -267,7 +248,10 @@ async def cmd_wiki(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = str(e)
         logger.error(f"Groq error: {e}")
         if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-            await safe_edit(msg, "⏳ Demasiadas consultas. Intenta en 30 segundos.")
+            await safe_edit(msg,
+                "⏳ Demasiadas consultas en este momento.\n"
+                "Intenta de nuevo en 30 segundos."
+            )
         else:
             await safe_edit(msg, "❌ No se pudo procesar la consulta. Intenta de nuevo.")
 
@@ -323,8 +307,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if platform == 'facebook':
         url = convertir_url_facebook(url)
-    elif platform == 'soundcloud':
-        url = await resolve_short_url(url)
 
     msg = await update.message.reply_text("Procesando...", reply_to_message_id=reply_id)
     folder = BASE_DIR / uuid.uuid4().hex
@@ -404,40 +386,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(msg, "No se pudo descargar el carrusel. Intenta en unos minutos.")
                 return
 
-        if platform == 'soundcloud':
-            logger.info(f"Descargando SoundCloud: {url}")
-            try:
-                opts = make_opts(folder, mode="audio", platform=platform)
-                meta = await download_with_retry(url, opts)
-                mp3s = list(folder.glob("*.mp3"))
-                if not mp3s:
-                    await safe_edit(msg, "❌ No se pudo descargar el audio de SoundCloud.")
-                    return
-                title = meta.get('title', 'Track')
-                artist = meta.get('uploader', 'Unknown Artist')
-                thumbnail_url = meta.get('thumbnail')
-                if thumbnail_url:
-                    thumb_bytes = await fetch_bytes(thumbnail_url)
-                    if thumb_bytes:
-                        await update.message.reply_photo(
-                            thumb_bytes,
-                            caption=f"🎵 {title}\n👤 {artist}",
-                            reply_to_message_id=reply_id
-                        )
-                with open(mp3s[0], 'rb') as f:
-                    await update.message.reply_audio(
-                        f, title=title, performer=artist,
-                        reply_to_message_id=reply_id,
-                        read_timeout=120, write_timeout=120
-                    )
-                await safe_delete(msg)
-                return
-            except Exception as e:
-                logger.error(f"SoundCloud download error: {e}")
-                await safe_edit(msg, "❌ Error al descargar de SoundCloud. Intenta de nuevo.")
-                return
-
-        # ── Video normal (TikTok, Instagram, Facebook) ────────────────────────
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
@@ -542,7 +490,7 @@ def main():
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
     req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
-    app = Application.builder().token(TOKEN).base_url("https://multi-api-production.up.railway.app/bot").request(req).concurrent_updates(True).build()
+    app = Application.builder().token(TOKEN).base_url("https://api-production-87d4e.up.railway.app/bot").request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_media))
