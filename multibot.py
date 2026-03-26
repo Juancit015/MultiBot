@@ -459,4 +459,102 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 views=meta.get('view_count'),
                 likes=meta.get('like_count'),
                 channel=meta.get('channel'),
-     
+                uploader=uploader,
+                description=description,
+            )
+        else:
+            title = build_title(
+                views=meta.get('view_count'),
+                likes=meta.get('like_count'),
+                channel=meta.get('channel'),
+                uploader=uploader,
+                description=description,
+                title=meta.get('title'),
+            )
+
+        mp4s = list(folder.glob("*.mp4"))
+        mp3s = list(folder.glob("*.mp3"))
+
+        if not mp4s:
+            await safe_edit(msg, "No se encontró el archivo de video.")
+            return
+
+        size_mb = mp4s[0].stat().st_size / (1024 * 1024)
+        if size_mb > LIMITE_MB:
+            duration_s = meta.get('duration')
+            dur_str = f"{int(duration_s//60)}:{int(duration_s%60):02d}" if duration_s else "?"
+            await safe_edit(msg,
+                f"Video demasiado grande para Telegram.\n"
+                f"Tamaño: {size_mb:.1f} MB | Duración: {dur_str}"
+            )
+            return
+
+        timeout_s = max(120, int(size_mb * 10))
+
+        try:
+            with open(mp4s[0], 'rb') as f:
+                await update.message.reply_video(
+                    f, caption=title,
+                    reply_to_message_id=reply_id,
+                    read_timeout=timeout_s,
+                    write_timeout=timeout_s
+                )
+        except Exception:
+            with open(mp4s[0], 'rb') as f:
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=f, caption=title,
+                    read_timeout=timeout_s,
+                    write_timeout=timeout_s
+                )
+
+        if mp3s:
+            try:
+                with open(mp3s[0], 'rb') as f:
+                    await update.message.reply_audio(
+                        f, title=f"{title} (Audio)",
+                        reply_to_message_id=reply_id,
+                        read_timeout=120, write_timeout=120
+                    )
+            except Exception:
+                with open(mp3s[0], 'rb') as f:
+                    await context.bot.send_audio(
+                        chat_id=update.effective_chat.id,
+                        audio=f, title=f"{title} (Audio)",
+                        read_timeout=120, write_timeout=120
+                    )
+
+        await safe_delete(msg)
+
+    except Exception as e:
+        logger.error(f"handle_media error: {e}")
+        await safe_edit(msg,
+            "⛔️ No se ha podido recuperar la información de la publicación\n\n"
+            "Posibles causas:\n"
+            "▫️ Cuenta cerrada (privada)\n"
+            "▫️ Error de recuperación de datos\n"
+            "▫️ La cuenta tiene restricciones de edad\n"
+            "▫️ Link inválido o no reconocido\n"
+            "▫️ Stories de Facebook no están soportadas"
+        )
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def main():
+    logger.info("Actualizando yt-dlp...")
+    os.system("pip install -U yt-dlp --quiet")
+    logger.info("yt-dlp actualizado.")
+
+    Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
+    app = Application.builder().token(TOKEN).base_url("https://multi-api-production.up.railway.app/bot").request(req).concurrent_updates(True).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("wiki",  cmd_wiki))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_media))
+    print("Bot corriendo...")
+    app.run_polling(timeout=60)
+
+
+if __name__ == '__main__':
+    main()
