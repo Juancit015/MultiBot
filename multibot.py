@@ -21,7 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 50 #Soportado por la api oficial de Telegram
+LIMITE_MB  = 2000 #Soportado por la api oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -487,7 +487,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        timeout_s = max(60, int(size_mb * 3))
+        timeout_s = max(120, int(size_mb * 10))
 
         try:
             with open(mp4s[0], 'rb') as f:
@@ -545,8 +545,8 @@ def main():
     logger.info("yt-dlp actualizado.")
 
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
-    req = HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=60, connect_timeout=30, pool_timeout=30)
-    app = Application.builder().token(TOKEN).request(req).concurrent_updates(True).build()
+    req = HTTPXRequest(connection_pool_size=8, read_timeout=300, write_timeout=300, connect_timeout=30, pool_timeout=30)
+    app = Application.builder().token(TOKEN).base_url("https://multi-api-production.up.railway.app/bot").request(req).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wiki",  cmd_wiki))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_media))
