@@ -1,4 +1,3 @@
-Ahora q cambios hago en el código pa usar la api nueva q creamos;
 #!/usr/bin/env python3
 import os, re, uuid, shutil, logging, asyncio
 from pathlib import Path
