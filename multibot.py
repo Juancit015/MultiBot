@@ -105,16 +105,19 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
         opts['cookiefile'] = str(COOKIES_FB)
 
     if mode == "video":
-        # ✅ Selecciona el mejor formato que ya tenga video+audio juntos, hasta 720p
-        opts['format'] = 'best[height<=720][ext=mp4]'
-        # Extraer audio como mp3 aparte (opcional, no afecta al video)
-        opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '128',
-            'nopostoverwrites': True,
-        }]
-        opts['keepvideo'] = True  # conserva el video original después de extraer audio
+        opts.update({
+            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'postprocessors': [
+                {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
+                {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
+                 'preferredquality': '128', 'nopostoverwrites': True},
+            ],
+            'postprocessor_args': {
+                'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
+            },
+            'keepvideo': True,
+        })
     else:
         opts.update({
             'format': 'bestaudio/best',
@@ -173,43 +176,28 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
     last_error = None
     is_soundcloud = 'soundcloud.com' in url
     actual_retries = 5 if is_soundcloud else max_retries
-
-    # Metadata para fallback (no estrictamente necesario, pero útil)
+    # Obtener metadata sin descargar para tener título/stats aunque falle el postprocesado
     meta_cache = {}
     try:
-        info_opts = {k: v for k, v in opts.items() if k not in ('postprocessors', 'keepvideo')}
+        info_opts = {k: v for k, v in opts.items()}
         info_opts['skip_download'] = True
         with yt_dlp.YoutubeDL(info_opts) as ydl:
             meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
     except Exception:
         pass
-
     for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = await asyncio.to_thread(ydl.extract_info, url, download=True)
-                # Si todo va bien, devolvemos info real
-                return info
+                return await asyncio.to_thread(ydl.extract_info, url, download=True)
         except Exception as e:
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # Si falla en postprocesado (ffprobe) pero el video ya se descargó,
-            # buscamos el archivo descargado y devolvemos metadata + ruta local
+            # FIX: si el error es de postprocesado (ffprobe) el video YA se descargó
+            # retornamos la metadata cacheada para conservar título y stats
             if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
-                logger.warning("Error de postprocesado ffprobe — el video ya está descargado")
-                # Intentamos recuperar el archivo descargado (sin postprocesar)
-                # Para ello, volvemos a ejecutar sin postprocesadores, solo descarga
-                fallback_opts = {k: v for k, v in opts.items() if k not in ('postprocessors', 'keepvideo')}
-                fallback_opts['format'] = 'best[height<=720][ext=mp4]'
-                try:
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl2:
-                        info2 = await asyncio.to_thread(ydl2.extract_info, url, download=True)
-                        return info2
-                except Exception as e2:
-                    logger.error(f"Fallback también falló: {e2}")
-                    # Si no se pudo, devolvemos metadata
-                    return meta_cache
+                logger.warning("Error de postprocesado ffprobe — video descargado, usando metadata cacheada")
+                return meta_cache
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
@@ -452,7 +440,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── Video normal (TikTok, Instagram, Facebook) ────────────────────────
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
-
         uploader    = meta.get('uploader') or meta.get('channel') or ''
         description = meta.get('description', '').strip()
 
