@@ -21,7 +21,7 @@ BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
 COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
 COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 2000
+LIMITE_MB  = 2000 #Soportado por la api oficial de Telegram
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -89,6 +89,7 @@ def limpiar_url(text: str) -> str:
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
+    # SoundCloud y audio necesitan más tiempo
     socket_timeout = 120 if platform in ('soundcloud',) or mode == "audio" else 60
     opts = {
         'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
@@ -174,6 +175,7 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
+    # SoundCloud necesita más reintentos por los timeouts
     is_soundcloud = 'soundcloud.com' in url
     actual_retries = 5 if is_soundcloud else max_retries
     for attempt in range(1, actual_retries + 1):
@@ -241,16 +243,9 @@ async def cmd_wiki(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ],
                 temperature=0.3,
                 max_completion_tokens=500,
-                tools=[{"type": "web_search"}],
                 stream=False,
             )
-            msg_content = completion.choices[0].message.content
-            if isinstance(msg_content, list):
-                for block in msg_content:
-                    if hasattr(block, 'text') and block.text:
-                        return block.text
-                return "❌ No se pudo obtener respuesta."
-            return msg_content
+            return completion.choices[0].message.content
 
         respuesta = await asyncio.to_thread(llamar_groq)
         await safe_edit(msg, respuesta[:4000])
@@ -315,22 +310,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     platform, url = get_link(text)
     if not platform:
-        if 'http' in text.lower():
-            await update.message.reply_text(
-                "⛔️ No se ha podido recuperar la información de la publicación\n\n"
-                "Posibles causas:\n"
-                "▫️ Cuenta cerrada (privada)\n"
-                "▫️ Error de recuperación de datos\n"
-                "▫️ La cuenta tiene restricciones de edad\n"
-                "▫️ Link inválido o no reconocido\n"
-                "▫️ Stories de Facebook no están soportadas",
-                reply_to_message_id=reply_id
-            )
         return
 
     if platform == 'facebook':
         url = convertir_url_facebook(url)
     elif platform == 'soundcloud':
+        # Resolver URL corta si es necesario
         url = await resolve_short_url(url)
 
     msg = await update.message.reply_text("Procesando...", reply_to_message_id=reply_id)
@@ -414,36 +399,49 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if platform == 'soundcloud':
             logger.info(f"Descargando SoundCloud: {url}")
             try:
+                # Descargar el audio con metadata
                 opts = make_opts(folder, mode="audio", platform=platform)
                 meta = await download_with_retry(url, opts)
+                
                 mp3s = list(folder.glob("*.mp3"))
                 if not mp3s:
                     await safe_edit(msg, "❌ No se pudo descargar el audio de SoundCloud.")
                     return
+                
                 title = meta.get('title', 'Track')
                 artist = meta.get('uploader', 'Unknown Artist')
                 thumbnail_url = meta.get('thumbnail')
+                
+                # Enviar portada si existe
                 if thumbnail_url:
                     thumb_bytes = await fetch_bytes(thumbnail_url)
                     if thumb_bytes:
+                        caption = f"🎵 {title}\n👤 {artist}"
                         await update.message.reply_photo(
                             thumb_bytes,
-                            caption=f"🎵 {title}\n👤 {artist}",
+                            caption=caption,
                             reply_to_message_id=reply_id
                         )
+                
+                # Enviar audio
                 with open(mp3s[0], 'rb') as f:
                     await update.message.reply_audio(
-                        f, title=title, performer=artist,
+                        f,
+                        title=title,
+                        performer=artist,
                         reply_to_message_id=reply_id,
-                        read_timeout=120, write_timeout=120
+                        read_timeout=120,
+                        write_timeout=120
                     )
+                
                 await safe_delete(msg)
                 return
+                
             except Exception as e:
                 logger.error(f"SoundCloud download error: {e}")
                 await safe_edit(msg, "❌ Error al descargar de SoundCloud. Intenta de nuevo.")
                 return
-
+        
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
