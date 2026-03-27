@@ -90,7 +90,8 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     opts = {
         'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'retries': 5, 'fragment_retries': 5, 'socket_timeout': 60,
+        'retries': 5, 'fragment_retries': 5,
+        'socket_timeout': 120 if mode == "audio" else 60,
         'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
         'restrictfilenames': True,
         'trim_file_name': 50,
@@ -172,19 +173,22 @@ async def resolve_short_url(url: str) -> str:
 
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
-    for attempt in range(1, max_retries + 1):
+    is_soundcloud = 'soundcloud.com' in url
+    actual_retries = 5 if is_soundcloud else max_retries
+    for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return await asyncio.to_thread(ydl.extract_info, url, download=True)
         except Exception as e:
             last_error = e
             err = str(e)
-            logger.warning(f"Intento {attempt}/{max_retries} fallido: {err[:120]}")
+            logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
-            if attempt < max_retries:
-                await asyncio.sleep(2 * attempt)
+            if attempt < actual_retries:
+                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
+                await asyncio.sleep(wait_time)
     raise last_error
 
 
