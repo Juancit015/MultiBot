@@ -449,7 +449,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(msg, "No se encontró el archivo de video.")
             return
 
-        # ── Incrustar audio en video si hay MP3 disponible ────────────────────
+        # Incrustar audio en video si hay MP3 disponible
         video_path = mp4s[0]
         if mp3s:
             merged = await asyncio.to_thread(merge_audio_into_video, video_path, mp3s[0])
@@ -487,6 +487,23 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
+
+        # Enviar MP3 por separado además del video
+        if mp3s:
+            try:
+                with open(mp3s[0], 'rb') as f:
+                    await update.message.reply_audio(
+                        f, title=f"{title} (Audio)",
+                        reply_to_message_id=reply_id,
+                        read_timeout=120, write_timeout=120
+                    )
+            except Exception:
+                with open(mp3s[0], 'rb') as f:
+                    await context.bot.send_audio(
+                        chat_id=update.effective_chat.id,
+                        audio=f, title=f"{title} (Audio)",
+                        read_timeout=120, write_timeout=120
+                    )
 
         await safe_delete(msg)
 
