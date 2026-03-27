@@ -15,7 +15,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 logger = logging.getLogger(__name__)
 
 TOKEN        = os.environ.get("BOT_TOKEN","***CLEARED***")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
 BASE_DIR     = Path("downloads")
 BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
@@ -126,7 +126,6 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
 
 def merge_audio_into_video(video_path: Path, audio_path: Path) -> Path | None:
-    """Incrusta el audio MP3 en el video MP4 usando FFmpeg."""
     output_path = video_path.parent / f"merged_{video_path.name}"
     try:
         cmd = [
@@ -202,6 +201,17 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
     last_error = None
     is_soundcloud = 'soundcloud.com' in url
     actual_retries = 5 if is_soundcloud else max_retries
+
+    # Obtener metadata antes de descargar para conservar título/stats
+    meta_cache = {}
+    try:
+        info_opts = {k: v for k, v in opts.items()}
+        info_opts['skip_download'] = True
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
+    except Exception:
+        pass
+
     for attempt in range(1, actual_retries + 1):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -210,6 +220,11 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
+            # Si el error es de postprocesado ffprobe, el video YA se descargó
+            # No tiene sentido reintentar — retornamos metadata cacheada
+            if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
+                logger.warning("Error ffprobe en postprocesado — video descargado, continuando con metadata cacheada")
+                return meta_cache
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
                 continue
