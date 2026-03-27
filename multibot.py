@@ -105,7 +105,8 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
     if mode == "video":
         opts.update({
-            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+            # Intenta H.264 primero, si no hay cae a cualquier formato y FFmpeg convierte
+            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best',
             'merge_output_format': 'mp4',
             'postprocessors': [
                 {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
@@ -113,6 +114,7 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
                  'preferredquality': '128', 'nopostoverwrites': True},
             ],
             'postprocessor_args': {
+                # Forzar siempre H.264 + AAC para compatibilidad con Telegram
                 'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
             },
             'keepvideo': True,
