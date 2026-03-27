@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, re, uuid, shutil, logging, asyncio
+import os, re, uuid, shutil, logging, asyncio, subprocess
 from pathlib import Path
 from threading import Thread
 
@@ -15,7 +15,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 logger = logging.getLogger(__name__)
 
 TOKEN        = os.environ.get("BOT_TOKEN","***CLEARED***")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 BASE_DIR     = Path("downloads")
 BASE_DIR.mkdir(exist_ok=True)
 COOKIES_TT = Path(__file__).parent / "cookies.txt"
@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """Eres un asistente de consultas informativas y enciclopédicas
 
 RE_PATTERNS = {
     'tiktok':    r'https?://(?:www\.|vm\.|vt\.)?tiktok\.com/[^\s]+',
-    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reel|tv|stories)/[^\s]+',
+    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reels?|tv|stories)/[^\s]+',
     'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
 }
 
@@ -105,7 +105,6 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
     if mode == "video":
         opts.update({
-            # Intenta H.264 primero, si no hay cae a cualquier formato y FFmpeg convierte
             'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best',
             'merge_output_format': 'mp4',
             'postprocessors': [
@@ -114,7 +113,6 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
                  'preferredquality': '128', 'nopostoverwrites': True},
             ],
             'postprocessor_args': {
-                # Forzar siempre H.264 + AAC para compatibilidad con Telegram
                 'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
             },
             'keepvideo': True,
@@ -125,6 +123,33 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
             'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}],
         })
     return opts
+
+
+def merge_audio_into_video(video_path: Path, audio_path: Path) -> Path | None:
+    """Incrusta el audio MP3 en el video MP4 usando FFmpeg."""
+    output_path = video_path.parent / f"merged_{video_path.name}"
+    try:
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', str(video_path),
+            '-i', str(audio_path),
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-shortest',
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode == 0 and output_path.exists():
+            logger.info(f"Audio incrustado exitosamente en {output_path.name}")
+            return output_path
+        else:
+            logger.warning(f"FFmpeg merge falló: {result.stderr.decode()[:200]}")
+            return None
+    except Exception as e:
+        logger.warning(f"merge_audio_into_video error: {e}")
+        return None
 
 
 def fmt_num(n):
@@ -254,10 +279,7 @@ async def cmd_wiki(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = str(e)
         logger.error(f"Groq error: {e}")
         if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-            await safe_edit(msg,
-                "⏳ Demasiadas consultas en este momento.\n"
-                "Intenta de nuevo en 30 segundos."
-            )
+            await safe_edit(msg, "⏳ Demasiadas consultas. Intenta en 30 segundos.")
         else:
             await safe_edit(msg, "❌ No se pudo procesar la consulta. Intenta de nuevo.")
 
@@ -427,7 +449,17 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(msg, "No se encontró el archivo de video.")
             return
 
-        size_mb = mp4s[0].stat().st_size / (1024 * 1024)
+        # ── Incrustar audio en video si hay MP3 disponible ────────────────────
+        video_path = mp4s[0]
+        if mp3s:
+            merged = await asyncio.to_thread(merge_audio_into_video, video_path, mp3s[0])
+            if merged:
+                video_path = merged
+                logger.info("Video enviado con audio incrustado")
+            else:
+                logger.warning("No se pudo incrustar audio, enviando video original")
+
+        size_mb = video_path.stat().st_size / (1024 * 1024)
         if size_mb > LIMITE_MB:
             duration_s = meta.get('duration')
             dur_str = f"{int(duration_s//60)}:{int(duration_s%60):02d}" if duration_s else "?"
@@ -440,7 +472,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         timeout_s = max(120, int(size_mb * 10))
 
         try:
-            with open(mp4s[0], 'rb') as f:
+            with open(video_path, 'rb') as f:
                 await update.message.reply_video(
                     f, caption=title,
                     reply_to_message_id=reply_id,
@@ -448,29 +480,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=timeout_s
                 )
         except Exception:
-            with open(mp4s[0], 'rb') as f:
+            with open(video_path, 'rb') as f:
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
                     video=f, caption=title,
                     read_timeout=timeout_s,
                     write_timeout=timeout_s
                 )
-
-        if mp3s:
-            try:
-                with open(mp3s[0], 'rb') as f:
-                    await update.message.reply_audio(
-                        f, title=f"{title} (Audio)",
-                        reply_to_message_id=reply_id,
-                        read_timeout=120, write_timeout=120
-                    )
-            except Exception:
-                with open(mp3s[0], 'rb') as f:
-                    await context.bot.send_audio(
-                        chat_id=update.effective_chat.id,
-                        audio=f, title=f"{title} (Audio)",
-                        read_timeout=120, write_timeout=120
-                    )
 
         await safe_delete(msg)
 
