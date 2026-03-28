@@ -177,13 +177,16 @@ async def fetch_bytes(url: str) -> bytes | None:
 
 
 async def tiktok_slides(url: str):
+    """Obtiene imágenes de slideshow de TikTok via tikwm.com"""
     try:
         r = await asyncio.to_thread(
             lambda: requests.post("https://www.tikwm.com/api/", data={'url': url, 'hd': 1}, timeout=20).json()
         )
         if r.get('code') == 0:
             d = r['data']
-            return d.get('images', []), d.get('music'), d.get('title', 'Slideshow')
+            images = d.get('images', [])
+            if images:
+                return images, d.get('music'), d.get('title', 'Slideshow')
     except Exception as e:
         logger.warning(f"TikWM error: {e}")
     return None, None, None
@@ -202,11 +205,10 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
     is_soundcloud = 'soundcloud.com' in url
     actual_retries = 5 if is_soundcloud else max_retries
 
-    # Obtener metadata antes de descargar para conservar título/stats
+    # Cachear metadata antes de descargar
     meta_cache = {}
     try:
-        info_opts = {k: v for k, v in opts.items()}
-        info_opts['skip_download'] = True
+        info_opts = {**opts, 'skip_download': True}
         with yt_dlp.YoutubeDL(info_opts) as ydl:
             meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
     except Exception:
@@ -220,10 +222,9 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # Si el error es de postprocesado ffprobe, el video YA se descargó
-            # No tiene sentido reintentar — retornamos metadata cacheada
+            # Error de postprocesado ffprobe — video ya descargado, usar metadata cacheada
             if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
-                logger.warning("Error ffprobe en postprocesado — video descargado, continuando con metadata cacheada")
+                logger.warning("Error ffprobe — video descargado, usando metadata cacheada")
                 return meta_cache
             if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
                 opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
@@ -307,6 +308,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = limpiar_url(text)
     reply_id = update.message.message_id
 
+    # ── SoundCloud ────────────────────────────────────────────────────────────
     if text.lower().startswith("find "):
         query = text[5:].strip()
         if not query:
@@ -356,26 +358,30 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     folder.mkdir(parents=True, exist_ok=True)
 
     try:
+        # ── TikTok ───────────────────────────────────────────────────────────
         if platform == 'tiktok':
-            if '/photo/' not in url:
-                url = await resolve_short_url(url)
+            # Resolver URL corta primero siempre
+            url = await resolve_short_url(url)
+
+            # Verificar si es slideshow
             if '/photo/' in url:
                 imgs, music_url, slide_title = await tiktok_slides(url)
-                slide_meta = {}
-                try:
-                    with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True,
-                                           'cookiefile': str(COOKIES_TT) if COOKIES_TT.exists() else None}) as ydl:
-                        slide_meta = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
-                except Exception:
-                    pass
-                caption_slide = build_title(
-                    views=slide_meta.get('view_count'),
-                    likes=slide_meta.get('like_count'),
-                    channel=slide_meta.get('channel'),
-                    uploader=slide_meta.get('uploader'),
-                    description=slide_meta.get('description') or slide_title,
-                )
                 if imgs:
+                    # Metadata con yt-dlp si es posible
+                    slide_meta = {}
+                    try:
+                        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True,
+                                               'cookiefile': str(COOKIES_TT) if COOKIES_TT.exists() else None}) as ydl:
+                            slide_meta = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
+                    except Exception:
+                        pass
+                    caption_slide = build_title(
+                        views=slide_meta.get('view_count'),
+                        likes=slide_meta.get('like_count'),
+                        channel=slide_meta.get('channel'),
+                        uploader=slide_meta.get('uploader'),
+                        description=slide_meta.get('description') or slide_title,
+                    )
                     contents = [c for c in await asyncio.gather(*[fetch_bytes(i) for i in imgs[:10]]) if c]
                     if contents:
                         await update.message.reply_media_group(
@@ -385,9 +391,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     if music_url and (music := await fetch_bytes(music_url)):
                         await update.message.reply_audio(music, title=caption_slide, reply_to_message_id=reply_id)
-                await safe_delete(msg)
-                return
+                    await safe_delete(msg)
+                    return
+                else:
+                    # tikwm falló — intentar con yt-dlp igual
+                    logger.warning("tikwm falló para slideshow, intentando yt-dlp")
 
+        # ── Instagram carrusel ───────────────────────────────────────────────
         if platform == 'instagram' and '/p/' in url:
             try:
                 import instaloader
@@ -429,6 +439,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(msg, "No se pudo descargar el carrusel. Intenta en unos minutos.")
                 return
 
+        # ── Video general ────────────────────────────────────────────────────
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
         uploader    = meta.get('uploader') or meta.get('channel') or ''
@@ -464,15 +475,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(msg, "No se encontró el archivo de video.")
             return
 
-        # Incrustar audio en video si hay MP3 disponible
+        # Incrustar audio en video si hay MP3
         video_path = mp4s[0]
         if mp3s:
             merged = await asyncio.to_thread(merge_audio_into_video, video_path, mp3s[0])
             if merged:
                 video_path = merged
                 logger.info("Video enviado con audio incrustado")
-            else:
-                logger.warning("No se pudo incrustar audio, enviando video original")
 
         size_mb = video_path.stat().st_size / (1024 * 1024)
         if size_mb > LIMITE_MB:
@@ -503,7 +512,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=timeout_s
                 )
 
-        # Enviar MP3 por separado además del video
+        # Enviar MP3 por separado
         if mp3s:
             try:
                 with open(mp3s[0], 'rb') as f:
