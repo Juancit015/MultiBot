@@ -126,6 +126,7 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
 
 
 def merge_audio_into_video(video_path: Path, audio_path: Path) -> Path | None:
+    """Fusiona audio MP3 en video MP4 usando FFmpeg."""
     output_path = video_path.parent / f"merged_{video_path.name}"
     try:
         cmd = [
@@ -141,13 +142,35 @@ def merge_audio_into_video(video_path: Path, audio_path: Path) -> Path | None:
         ]
         result = subprocess.run(cmd, capture_output=True, timeout=120)
         if result.returncode == 0 and output_path.exists():
-            logger.info(f"Audio incrustado exitosamente en {output_path.name}")
+            logger.info(f"Audio incrustado en {output_path.name}")
             return output_path
         else:
             logger.warning(f"FFmpeg merge falló: {result.stderr.decode()[:200]}")
             return None
     except Exception as e:
         logger.warning(f"merge_audio_into_video error: {e}")
+        return None
+
+
+def extract_audio_from_video(video_path: Path) -> Path | None:
+    """Extrae audio MP3 de un video usando FFmpeg directamente."""
+    audio_path = video_path.with_suffix('.mp3')
+    try:
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', str(video_path),
+            '-vn',
+            '-acodec', 'mp3',
+            '-q:a', '2',
+            str(audio_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 0:
+            logger.info(f"Audio extraído: {audio_path.name}")
+            return audio_path
+        return None
+    except Exception as e:
+        logger.warning(f"extract_audio_from_video error: {e}")
         return None
 
 
@@ -177,7 +200,6 @@ async def fetch_bytes(url: str) -> bytes | None:
 
 
 async def tiktok_slides(url: str):
-    """Obtiene imágenes de slideshow de TikTok via tikwm.com"""
     try:
         r = await asyncio.to_thread(
             lambda: requests.post("https://www.tikwm.com/api/", data={'url': url, 'hd': 1}, timeout=20).json()
@@ -190,6 +212,27 @@ async def tiktok_slides(url: str):
     except Exception as e:
         logger.warning(f"TikWM error: {e}")
     return None, None, None
+
+
+async def tiktok_video_tikwm(url: str) -> dict | None:
+    """Descarga video de TikTok via tikwm como fallback cuando yt-dlp falla o no tiene audio."""
+    try:
+        r = await asyncio.to_thread(
+            lambda: requests.post("https://www.tikwm.com/api/", data={'url': url, 'hd': 1}, timeout=20).json()
+        )
+        if r.get('code') == 0:
+            d = r['data']
+            return {
+                'video_url': d.get('play') or d.get('wmplay'),
+                'music_url': d.get('music'),
+                'title':     d.get('title', ''),
+                'author':    d.get('author', {}).get('unique_id', ''),
+                'views':     d.get('play_count'),
+                'likes':     d.get('digg_count'),
+            }
+    except Exception as e:
+        logger.warning(f"TikWM video error: {e}")
+    return None
 
 
 async def resolve_short_url(url: str) -> str:
@@ -222,7 +265,7 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
             last_error = e
             err = str(e)
             logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # Error de postprocesado ffprobe — video ya descargado, usar metadata cacheada
+            # ffprobe falla pero el video YA se descargó — usar metadata cacheada
             if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
                 logger.warning("Error ffprobe — video descargado, usando metadata cacheada")
                 return meta_cache
@@ -360,14 +403,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # ── TikTok ───────────────────────────────────────────────────────────
         if platform == 'tiktok':
-            # Resolver URL corta primero siempre
             url = await resolve_short_url(url)
-
-            # Verificar si es slideshow
             if '/photo/' in url:
                 imgs, music_url, slide_title = await tiktok_slides(url)
                 if imgs:
-                    # Metadata con yt-dlp si es posible
                     slide_meta = {}
                     try:
                         with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True,
@@ -394,7 +433,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await safe_delete(msg)
                     return
                 else:
-                    # tikwm falló — intentar con yt-dlp igual
                     logger.warning("tikwm falló para slideshow, intentando yt-dlp")
 
         # ── Instagram carrusel ───────────────────────────────────────────────
@@ -442,6 +480,30 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── Video general ────────────────────────────────────────────────────
         logger.info(f"Descargando {platform}: {url}")
         meta = await download_with_retry(url, make_opts(folder, mode="video", platform=platform))
+
+        # Si es TikTok y el video no tiene audio, usar tikwm como fallback
+        if platform == 'tiktok':
+            mp4s_check = list(folder.glob("*.mp4"))
+            if mp4s_check:
+                # Verificar si el video tiene audio
+                probe = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries',
+                     'stream=codec_type', '-of', 'default=noprint_wrappers=1', str(mp4s_check[0])],
+                    capture_output=True, timeout=10
+                )
+                if not probe.stdout.strip():
+                    logger.warning("Video TikTok sin audio — usando tikwm como fallback")
+                    tikwm_data = await tiktok_video_tikwm(url)
+                    if tikwm_data and tikwm_data.get('video_url'):
+                        video_bytes = await fetch_bytes(tikwm_data['video_url'])
+                        if video_bytes:
+                            # Guardar video de tikwm
+                            tikwm_path = folder / "tikwm_video.mp4"
+                            tikwm_path.write_bytes(video_bytes)
+                            # Limpiar videos anteriores sin audio
+                            for old_mp4 in mp4s_check:
+                                old_mp4.unlink(missing_ok=True)
+                            logger.info("Video tikwm descargado con audio")
         uploader    = meta.get('uploader') or meta.get('channel') or ''
         description = meta.get('description', '').strip()
 
@@ -475,13 +537,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(msg, "No se encontró el archivo de video.")
             return
 
-        # Incrustar audio en video si hay MP3
         video_path = mp4s[0]
+
+        # Si no hay MP3 (ffprobe falló), extraer audio con FFmpeg directamente
+        if not mp3s:
+            logger.info("Sin MP3 — extrayendo audio con FFmpeg...")
+            extracted = await asyncio.to_thread(extract_audio_from_video, video_path)
+            if extracted:
+                mp3s = [extracted]
+
+        # Incrustar audio en video si hay MP3
         if mp3s:
             merged = await asyncio.to_thread(merge_audio_into_video, video_path, mp3s[0])
             if merged:
                 video_path = merged
-                logger.info("Video enviado con audio incrustado")
+                logger.info("Video con audio incrustado listo")
 
         size_mb = video_path.stat().st_size / (1024 * 1024)
         if size_mb > LIMITE_MB:
