@@ -2,8 +2,8 @@ import asyncio
 import logging
 
 from bot.config import LIMITE_MB
-from bot.handlers.tiktok import ensure_tiktok_audio
 from bot.services.ffmpeg import extract_audio_from_video, merge_audio_into_video
+from bot.services.tikwm import ensure_tiktok_audio
 from bot.services.ytdlp import download_with_retry, make_opts
 from bot.utils.messaging import safe_delete, safe_edit
 from bot.utils.text import build_title

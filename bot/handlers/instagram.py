@@ -4,6 +4,7 @@ import re
 
 from telegram import InputMediaPhoto
 
+from bot.config import IG_SESSION
 from bot.services.net import fetch_bytes
 from bot.utils.messaging import safe_delete, safe_edit
 from bot.utils.text import build_title
@@ -20,7 +21,7 @@ async def handle_instagram_carousel(update, url: str, msg, reply_id: int) -> boo
             sc = shortcode.group(1)
             L = instaloader.Instaloader()
             try:
-                L.load_session_from_file('ig_session')
+                L.load_session_from_file(IG_SESSION)
             except Exception:
                 pass
             post = await asyncio.to_thread(

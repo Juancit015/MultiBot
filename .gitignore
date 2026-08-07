@@ -5,3 +5,5 @@ downloads/*
 *.m4a
 *.part
 test.mp4
+cookies*.txt
+ig_session
