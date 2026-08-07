@@ -4,9 +4,7 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import uuid
-from pathlib import Path
 from threading import Thread
 
 import requests
@@ -25,13 +23,18 @@ from telegram.request import HTTPXRequest
 
 from bot.config import (
     BASE_DIR,
-    COOKIES_FB,
-    COOKIES_IG,
     COOKIES_TT,
     GROQ_API_KEY,
     LIMITE_MB,
     TOKEN,
 )
+from bot.services.ffmpeg import (
+    extract_audio_from_video,
+    merge_audio_into_video,
+    video_has_audio,
+)
+from bot.services.tikwm import tiktok_slides, tiktok_video_tikwm
+from bot.services.ytdlp import download_with_retry, make_opts
 from bot.utils.messaging import safe_delete, safe_edit
 from bot.utils.text import build_title, convertir_url_facebook, get_link, limpiar_url
 
@@ -67,135 +70,11 @@ SYSTEM_PROMPT = """Eres un asistente de consultas informativas y enciclopédicas
 
 11. NO respondas sobre comandos de terminal, IPs, pings, código, configuraciones de red ni técnicas informáticas prácticas. Solo información enciclopédica sobre conceptos, no instrucciones de uso."""
 
-def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
-    folder.mkdir(parents=True, exist_ok=True)
-    opts = {
-        'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
-        'retries': 5, 'fragment_retries': 5,
-        'socket_timeout': 120 if mode == "audio" else 60,
-        'outtmpl': str(folder / '%(id)s.%(ext)s'), 'updatetime': False,
-        'restrictfilenames': True,
-        'trim_file_name': 50,
-    }
-    if platform == 'instagram' and COOKIES_IG.exists():
-        opts['cookiefile'] = str(COOKIES_IG)
-    elif platform == 'tiktok' and COOKIES_TT.exists():
-        opts['cookiefile'] = str(COOKIES_TT)
-    elif platform == 'facebook' and COOKIES_FB.exists():
-        opts['cookiefile'] = str(COOKIES_FB)
-
-    if mode == "video":
-        opts.update({
-            'format': 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best',
-            'merge_output_format': 'mp4',
-            'postprocessors': [
-                {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'},
-                {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3',
-                 'preferredquality': '128', 'nopostoverwrites': True},
-            ],
-            'postprocessor_args': {
-                'FFmpegVideoConvertor': ['-vcodec', 'libx264', '-acodec', 'aac', '-strict', 'experimental'],
-            },
-            'keepvideo': True,
-        })
-    else:
-        opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}],
-        })
-    return opts
-
-
-def merge_audio_into_video(video_path: Path, audio_path: Path) -> Path | None:
-    """Fusiona audio MP3 en video MP4 usando FFmpeg."""
-    output_path = video_path.parent / f"merged_{video_path.name}"
-    try:
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', str(video_path),
-            '-i', str(audio_path),
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            '-shortest',
-            str(output_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode == 0 and output_path.exists():
-            logger.info(f"Audio incrustado en {output_path.name}")
-            return output_path
-        else:
-            logger.warning(f"FFmpeg merge falló: {result.stderr.decode()[:200]}")
-            return None
-    except Exception as e:
-        logger.warning(f"merge_audio_into_video error: {e}")
-        return None
-
-
-def extract_audio_from_video(video_path: Path) -> Path | None:
-    """Extrae audio MP3 de un video usando FFmpeg directamente."""
-    audio_path = video_path.with_suffix('.mp3')
-    try:
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', str(video_path),
-            '-vn',
-            '-acodec', 'mp3',
-            '-q:a', '2',
-            str(audio_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 0:
-            logger.info(f"Audio extraído: {audio_path.name}")
-            return audio_path
-        return None
-    except Exception as e:
-        logger.warning(f"extract_audio_from_video error: {e}")
-        return None
-
-
 async def fetch_bytes(url: str) -> bytes | None:
     try:
         return await asyncio.to_thread(lambda: requests.get(url, timeout=15).content)
     except Exception as e:
         logger.warning(f"fetch_bytes error: {e}")
-
-
-async def tiktok_slides(url: str):
-    try:
-        r = await asyncio.to_thread(
-            lambda: requests.post("https://www.tikwm.com/api/", data={'url': url, 'hd': 1}, timeout=20).json()
-        )
-        if r.get('code') == 0:
-            d = r['data']
-            images = d.get('images', [])
-            if images:
-                return images, d.get('music'), d.get('title', 'Slideshow')
-    except Exception as e:
-        logger.warning(f"TikWM error: {e}")
-    return None, None, None
-
-
-async def tiktok_video_tikwm(url: str) -> dict | None:
-    """Descarga video de TikTok via tikwm como fallback cuando yt-dlp falla o no tiene audio."""
-    try:
-        r = await asyncio.to_thread(
-            lambda: requests.post("https://www.tikwm.com/api/", data={'url': url, 'hd': 1}, timeout=20).json()
-        )
-        if r.get('code') == 0:
-            d = r['data']
-            return {
-                'video_url': d.get('play') or d.get('wmplay'),
-                'music_url': d.get('music'),
-                'title':     d.get('title', ''),
-                'author':    d.get('author', {}).get('unique_id', ''),
-                'views':     d.get('play_count'),
-                'likes':     d.get('digg_count'),
-            }
-    except Exception as e:
-        logger.warning(f"TikWM video error: {e}")
-    return None
 
 
 async def resolve_short_url(url: str) -> str:
@@ -204,41 +83,6 @@ async def resolve_short_url(url: str) -> str:
     except Exception as e:
         logger.warning(f"resolve_short_url error: {e}")
         return url
-
-
-async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
-    last_error = None
-    is_soundcloud = 'soundcloud.com' in url
-    actual_retries = 5 if is_soundcloud else max_retries
-
-    # Cachear metadata antes de descargar
-    meta_cache = {}
-    try:
-        info_opts = {**opts, 'skip_download': True}
-        with yt_dlp.YoutubeDL(info_opts) as ydl:
-            meta_cache = await asyncio.to_thread(ydl.extract_info, url, download=False) or {}
-    except Exception:
-        pass
-
-    for attempt in range(1, actual_retries + 1):
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return await asyncio.to_thread(ydl.extract_info, url, download=True)
-        except Exception as e:
-            last_error = e
-            err = str(e)
-            logger.warning(f"Intento {attempt}/{actual_retries} fallido: {err[:120]}")
-            # ffprobe falla pero el video YA se descargó — usar metadata cacheada
-            if 'unable to obtain file audio codec' in err or 'Postprocessing' in err:
-                logger.warning("Error ffprobe — video descargado, usando metadata cacheada")
-                return meta_cache
-            if ('does not look like a Netscape' in err or 'cookies' in err.lower()) and 'cookiefile' in opts:
-                opts = {k: v for k, v in opts.items() if k != 'cookiefile'}
-                continue
-            if attempt < actual_retries:
-                wait_time = 3 * attempt if is_soundcloud else 2 * attempt
-                await asyncio.sleep(wait_time)
-    raise last_error
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -435,12 +279,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mp4s_check = list(folder.glob("*.mp4"))
             if mp4s_check:
                 # Verificar si el video tiene audio
-                probe = subprocess.run(
-                    ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries',
-                     'stream=codec_type', '-of', 'default=noprint_wrappers=1', str(mp4s_check[0])],
-                    capture_output=True, timeout=10
-                )
-                if not probe.stdout.strip():
+                if not video_has_audio(mp4s_check[0]):
                     logger.warning("Video TikTok sin audio — usando tikwm como fallback")
                     tikwm_data = await tiktok_video_tikwm(url)
                     if tikwm_data and tikwm_data.get('video_url'):
