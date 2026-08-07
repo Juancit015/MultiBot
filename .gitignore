@@ -3,7 +3,28 @@ downloads/*
 *.mp4
 *.mp3
 *.m4a
+*.wav
 *.part
 test.mp4
+
+# Credenciales y sesiones
+.env
+.env.*
+!.env.example
 cookies*.txt
 ig_session
+instagram_session
+fb_session
+*.session
+
+# Caches y entornos
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.idea/
+.vscode/
