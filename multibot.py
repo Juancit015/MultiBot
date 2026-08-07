@@ -1,27 +1,42 @@
 #!/usr/bin/env python3
-import os, re, uuid, shutil, logging, asyncio, subprocess
+import asyncio
+import logging
+import os
+import re
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 from threading import Thread
 
 import requests
-from groq import Groq
-from flask import Flask
-from telegram import Update, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.request import HTTPXRequest
 import yt_dlp
+from flask import Flask
+from groq import Groq
+from telegram import InputMediaPhoto, Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+from telegram.request import HTTPXRequest
+
+from bot.config import (
+    BASE_DIR,
+    COOKIES_FB,
+    COOKIES_IG,
+    COOKIES_TT,
+    GROQ_API_KEY,
+    LIMITE_MB,
+    TOKEN,
+)
+from bot.utils.messaging import safe_delete, safe_edit
+from bot.utils.text import build_title, convertir_url_facebook, get_link, limpiar_url
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-TOKEN        = os.environ.get("BOT_TOKEN","***CLEARED***")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "***CLEARED***")
-BASE_DIR     = Path("downloads")
-BASE_DIR.mkdir(exist_ok=True)
-COOKIES_TT = Path(__file__).parent / "cookies.txt"
-COOKIES_IG = Path(__file__).parent / "cookies_ig.txt"
-COOKIES_FB = Path(__file__).parent / "cookiesFB.txt"
-LIMITE_MB  = 2000
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -51,40 +66,6 @@ SYSTEM_PROMPT = """Eres un asistente de consultas informativas y enciclopédicas
 10. NO respondas preguntas sobre ti mismo como qué IA eres, en qué te basas, quién te creó o cómo funcionas. Responde EXACTAMENTE: ⚠️ Este comando es solo para consultas informativas.
 
 11. NO respondas sobre comandos de terminal, IPs, pings, código, configuraciones de red ni técnicas informáticas prácticas. Solo información enciclopédica sobre conceptos, no instrucciones de uso."""
-
-RE_PATTERNS = {
-    'tiktok':    r'https?://(?:www\.|vm\.|vt\.)?tiktok\.com/[^\s]+',
-    'instagram': r'https?://(?:www\.)?instagram\.com/(?:p|reels?|tv|stories)/[^\s]+',
-    'facebook':  r'https?://(?:www\.|m\.|web\.|fb\.)(?:facebook\.com|watch)/[^\s]+|https?://www\.facebook\.com/share/[^\s]+',
-}
-
-
-def get_link(text: str):
-    for platform, pattern in RE_PATTERNS.items():
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            return platform, m.group(0)
-    return None, None
-
-
-def convertir_url_facebook(url: str) -> str:
-    if '/reel/' in url:
-        video_id = re.search(r'/reel/(\d+)', url)
-        if video_id:
-            nueva_url = f"https://www.facebook.com/watch/?v={video_id.group(1)}"
-            logger.info(f"URL Facebook convertida: {url} -> {nueva_url}")
-            return nueva_url
-    return url
-
-
-def limpiar_url(text: str) -> str:
-    text = re.sub(r'(https?://\S+)', lambda m: m.group(1).replace(' ', ''), text)
-    text = re.sub(r'(instagram\.com)[A-Za-z]+(reel|stories|p|tv)', r'\1/\2', text, flags=re.IGNORECASE)
-    text = re.sub(r'(tiktok\.com)[A-Za-z]+(@|video|photo)', r'\1/\2', text, flags=re.IGNORECASE)
-    text = re.sub(r'(facebook\.com)[A-Za-z]+(share|watch|video)', r'\1/\2', text, flags=re.IGNORECASE)
-    text = re.sub(r'(\.com)/+', r'\1/', text)
-    return text
-
 
 def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
@@ -174,24 +155,6 @@ def extract_audio_from_video(video_path: Path) -> Path | None:
         return None
 
 
-def fmt_num(n):
-    if not n: return None
-    if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
-    if n >= 1_000: return f"{n/1_000:.0f}K"
-    return str(n)
-
-
-def build_title(views=None, likes=None, channel=None, uploader=None, description=None, title=None):
-    parts = []
-    if fmt_num(views):  parts.append(f"{fmt_num(views)} views")
-    if fmt_num(likes):  parts.append(f"{fmt_num(likes)} likes")
-    canal = channel or uploader or ""
-    if canal:           parts.append(canal)
-    desc = (description or title or "")[:150]
-    if desc:            parts.append(desc)
-    return " | ".join(parts) if parts else "Video"
-
-
 async def fetch_bytes(url: str) -> bytes | None:
     try:
         return await asyncio.to_thread(lambda: requests.get(url, timeout=15).content)
@@ -276,20 +239,6 @@ async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dic
                 wait_time = 3 * attempt if is_soundcloud else 2 * attempt
                 await asyncio.sleep(wait_time)
     raise last_error
-
-
-async def safe_delete(msg):
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
-
-async def safe_edit(msg, text):
-    try:
-        await msg.edit_text(text)
-    except Exception:
-        pass
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
