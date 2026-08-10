@@ -60,13 +60,28 @@ def isolated_base(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def no_live_requests(monkeypatch):
-    """Guarda anti-red: si un test olvida un mock y llama a tikwm real, revienta."""
+    """Guarda anti-red: si un test olvida un mock y llama a tikwm o net real, revienta."""
+    import bot.services.net
     import bot.services.tikwm
 
     def _boom(*a, **k):
         raise AssertionError("I/O externa real (requests) no permitida en tests")
 
     monkeypatch.setattr(bot.services.tikwm.requests, "post", _boom)
+    monkeypatch.setattr(bot.services.net.requests, "get", _boom)
+    monkeypatch.setattr(bot.services.net.requests, "head", _boom)
+
+
+@pytest.fixture(autouse=True)
+def no_real_resolve_short_url(monkeypatch):
+    """resolve_short_url aislado: devuelve la URL sin cambios (equivalente al
+    fallback sin red) para que ningún test dependa de red real ni latencia."""
+    import bot.handlers.media
+
+    async def _resolve(url: str) -> str:
+        return url
+
+    monkeypatch.setattr(bot.handlers.media, "resolve_short_url", _resolve)
 
 
 @pytest.fixture

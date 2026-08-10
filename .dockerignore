@@ -34,3 +34,8 @@ env/
 
 # Documentación (no necesaria en runtime)
 *.md
+
+# Solo desarrollo (no necesarios en runtime)
+tests/
+requirements-dev.txt
+pytest.ini

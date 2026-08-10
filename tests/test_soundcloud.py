@@ -4,11 +4,11 @@ from tests.mocks.telegram import FakeContext, FakeUpdate
 
 
 async def test_T13_soundcloud_find_thumb_audio_y_borrado(monkeypatch):
-    import bot.handlers.soundcloud as sc_mod
+    import bot.services.ytdlp as ytdlp_svc
     from bot.handlers import media
 
-    monkeypatch.setattr(sc_mod.yt_dlp, "YoutubeDL", FakeYdlAudio)
-    monkeypatch.setattr(sc_mod, "make_opts",
+    monkeypatch.setattr(ytdlp_svc.yt_dlp, "YoutubeDL", FakeYdlAudio)
+    monkeypatch.setattr(ytdlp_svc, "make_opts",
                         lambda folder, mode="audio": {"folder": str(folder)})
 
     update, ctx = FakeUpdate("find artista cancion"), FakeContext()

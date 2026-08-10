@@ -3,10 +3,8 @@ import logging
 import shutil
 import uuid
 
-import yt_dlp
-
 from bot.config import BASE_DIR
-from bot.services.ytdlp import make_opts
+from bot.services.ytdlp import sc_search
 from bot.utils.messaging import safe_delete, safe_edit
 
 logger = logging.getLogger(__name__)
@@ -16,10 +14,7 @@ async def handle_find(update, msg, query: str, reply_id: int):
     folder = BASE_DIR / uuid.uuid4().hex
     folder.mkdir(parents=True, exist_ok=True)
     try:
-        with yt_dlp.YoutubeDL(make_opts(folder, mode="audio")) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, f"scsearch1:{query}", download=True)
-            if 'entries' in info:
-                info = info['entries'][0]
+        info = await sc_search(query, folder)
         mp3s = list(folder.glob("*.mp3"))
         if not mp3s:
             await safe_edit(msg, "No se pudo descargar el audio.")

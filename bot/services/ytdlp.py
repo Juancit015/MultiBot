@@ -48,6 +48,15 @@ def make_opts(folder: Path, mode: str = "video", platform: str = "") -> dict:
     return opts
 
 
+async def sc_search(query: str, folder: Path) -> dict:
+    """Búsqueda en SoundCloud (scsearch1) con yt-dlp; devuelve metadata del primer resultado."""
+    with yt_dlp.YoutubeDL(make_opts(folder, mode="audio")) as ydl:
+        info = await asyncio.to_thread(ydl.extract_info, f"scsearch1:{query}", download=True)
+        if 'entries' in info:
+            info = info['entries'][0]
+    return info
+
+
 async def download_with_retry(url: str, opts: dict, max_retries: int = 3) -> dict:
     last_error = None
     is_soundcloud = 'soundcloud.com' in url

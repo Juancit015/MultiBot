@@ -16,11 +16,12 @@ MultiBot/
 │   │   ├── tiktok.py           # Slides de TikTok (/photo/...)
 │   │   └── wiki.py             # Comando /wiki (Groq)
 │   ├── services/               # Integraciones externas y herramientas de sistema
-│   │   ├── ffmpeg.py           # ffprobe (detección de audio) + extract/merge con FFmpeg
-│   │   ├── groq.py             # Cliente Groq (prompt del sistema, reintentos, errores de cuota)
-│   │   ├── net.py              # fetch_bytes y resolución de short URLs
-│   │   ├── tikwm.py            # API TikWM (slides y fallback de audio de TikTok)
-│   │   └── ytdlp.py            # Opciones de yt-dlp, cookies por plataforma, descarga con reintentos
+│   │   ├── ffmpeg.py            # ffprobe (detección de audio) + extract/merge con FFmpeg
+│   │   ├── groq.py              # Cliente Groq (prompt del sistema, reintentos, errores de cuota)
+│   │   ├── instagram.py         # Instaloader: nodos y metadata de carruseles (IO externa aislada)
+│   │   ├── net.py               # fetch_bytes y resolución de short URLs
+│   │   ├── tikwm.py             # API TikWM (slides y fallback de audio de TikTok)
+│   │   └── ytdlp.py             # Opciones de yt-dlp, cookies por plataforma, descarga con reintentos, búsqueda SoundCloud
 │   └── utils/                  # Utilidades
 │       ├── messaging.py        # safe_edit / safe_delete (nunca rompen el flujo)
 │       └── text.py             # Detección de URLs, limpieza, títulos formateados
@@ -67,5 +68,5 @@ MultiBot/
 ## Notas
 
 - `downloads/` no se versiona (solo `.gitkeep`); el bot crea ahí una carpeta por petición y la elimina al terminar.
-- `cookies*.txt`, `ig_session` y `.env` no se versionan (`.gitignore`). `cookies_yt.txt` existe en el working tree pero **no se usa** en código: solo `cookies.txt` (TikTok), `cookies_ig.txt` (Instagram) y `cookiesFB.txt` (Facebook).
+- `cookies*.txt`, `ig_session` y `.env` no se versionan (`.gitignore`). En código se usan `cookies.txt` (TikTok), `cookies_ig.txt` (Instagram) y `cookiesFB.txt` (Facebook).
 - Tests con `pytest`; los que generan medios se saltan si `ffmpeg/ffprobe` no estan en el PATH (`pytest.ini`, mark `ffmpeg`).
