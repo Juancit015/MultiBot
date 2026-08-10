@@ -41,10 +41,6 @@ def _validar_config():
 def main():
     _validar_config()
 
-    logger.info("Actualizando yt-dlp...")
-    os.system("pip install -U yt-dlp --quiet")
-    logger.info("yt-dlp actualizado.")
-
     Thread(target=lambda: Flask(__name__).run(host='0.0.0.0', port=7860), daemon=True).start()
     req = HTTPXRequest(connect_timeout=30, read_timeout=300, write_timeout=300, pool_timeout=30, connection_pool_size=8)
     app = Application.builder().token(TOKEN).base_url(BOT_API_BASE_URL).request(req).concurrent_updates(True).build()

@@ -1,0 +1,36 @@
+# Credenciales y sesiones — nunca al contexto de build
+.env
+.env.*
+!.env.example
+cookies*.txt
+ig_session
+instagram_session
+fb_session
+*.session
+
+# Control de versiones
+.git
+.gitignore
+
+# Descargas y archivos de trabajo
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.wav
+*.part
+
+# Entornos y caches
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.idea/
+.vscode/
+
+# Documentación (no necesaria en runtime)
+*.md

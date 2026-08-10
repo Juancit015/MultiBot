@@ -1,0 +1,1 @@
+"""Suite de tests de MultiBot — Fase 3 (pytest)."""

@@ -13,6 +13,7 @@ test.mp4
 !.env.example
 cookies*.txt
 ig_session
+ig_session/
 instagram_session
 fb_session
 *.session
