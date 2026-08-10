@@ -62,7 +62,7 @@ Flujo de arranque (`multibot.py`):
 ## Instalación local
 
 ```bash
-git clone https://github.com/pybot54-crypto/MultiBot.git
+git clone https://github.com/Juancit015/MultiBot.git
 cd MultiBot
 
 python3.11 -m venv .venv
@@ -245,4 +245,5 @@ git check-ignore cookies.txt ig_session .env .env.example 2>/dev/null
 ## Licencia
 
 Sin licencia definida en el repositorio.
-# MultiBot
+
+> **Estructura del repositorio:** consultar [STRUCTURE.md](STRUCTURE.md).
