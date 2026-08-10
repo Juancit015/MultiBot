@@ -1,68 +1,40 @@
 # MultiBot
 
-Bot de Telegram que descarga y reenvía contenido multimedia de TikTok, Instagram y Facebook (videos, reels, stories, carruseles y slideshows), busca canciones en SoundCloud y responde consultas enciclopédicas con Groq (`/wiki`).
+Bot de Telegram en Python que descarga y reenvía contenido de **TikTok, Instagram y Facebook** (videos, reels, stories, carruseles y slideshows con su audio), busca canciones en **SoundCloud** (`find <cancion>`) y responde consultas informativas en **Groq** (`/wiki <consulta>`).
 
-## Funciones
-
-- **Videos:** pega un enlace de TikTok (`tiktok.com`), Instagram (`instagram.com/p|reel|tv|stories`) o Facebook (`facebook.com`, `fb.watch`) y el bot lo descarga con yt-dlp, incrusta el audio con FFmpeg y lo envía junto con su MP3. Límite de subida: 2000 MB.
-- **Carruseles de Instagram:** los posts `/p/...` con varias fotos se envían como álbum (instaloader + sesión `ig_session`).
-- **Slides de TikTok:** los enlaces `/photo/...` se envían como álbum con su audio (API TikWM).
-- **SoundCloud:** `find <cancion>` descarga el primer resultado (`scsearch1`) como MP3 con su carátula.
-- **Consultas:** `/wiki <consulta>` responde información enciclopédica vía Groq (modelo `llama-3.3-70b-versatile` por defecto).
-- **Keep-alive:** al arrancar levanta, además, un servidor Flask en el puerto `7860`.
+Arranque robusto: valida las credenciales obligatorias antes de iniciar (fail-fast) y levanta un endpoint Flask de healthcheck en paralelo al polling de Telegram.
 
 ## Stack
 
-| Componente | Versión / rango (requirements.txt) |
-| --- | --- |
-| Python | 3.11+ (Dockerfile: `python:3.11-slim`; probado local en 3.14) |
-| python-telegram-bot | `>=21.0, <22.0` — se importa como `telegram` |
-| yt-dlp | `>=2025.1.1` |
-| groq | `>=0.10.0` |
-| flask | `>=3.0.0` |
-| requests | `>=2.31.0` |
-| httpx | `>=0.27.0` |
-| instaloader | `>=4.11.0` |
-| ffmpeg + ffprobe | binarios del sistema (los instala el paso 1; no son paquetes pip) |
-
-La descarga de video usa yt-dlp con salida MP4 (H.264 + AAC, máx. 720p); el audio se extrae o fusiona con FFmpeg. Todo el tráfico de subida sale por la API de Telegram (`BOT_API_BASE_URL`).
+- Runtime: **Python 3.11+** (imagen del contenedor `python:3.11-slim`; no hay restricción de versión en `requirements.txt`)
+- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) **≥ 21.0, < 22.0** — cliente de la API de Telegram (import: `telegram` / `telegram.ext`)
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) **≥ 2025.1.1** — descarga de medias (import: `yt_dlp`), requiere **ffmpeg/ffprobe** en el sistema
+- [groq](https://github.com/groq/groq-python) **≥ 0.10.0** — modelo `llama-3.3-70b-versatile` para `/wiki`
+- [flask](https://flask.palletsprojects.com/) **≥ 3.0.0** — healthcheck HTTP en el puerto 7860
+- [instaloader](https://instaloader.github.io/) **≥ 4.11.0** — carruseles de Instagram (`/p/`)
+- [requests](https://requests.readthedocs.io/) **≥ 2.31.0** y [httpx](https://www.python-httpx.org/) **≥ 0.27.0** — HTTP (descargas auxiliares, cliente de Telegram)
+- [python-dotenv](https://github.com/theskumar/python-dotenv) **≥ 1.0.0** — carga de `.env` al arrancar
+- Desarrollo: pytest **≥ 8, < 9** + pytest-asyncio **≥ 0.23, < 1** (`requirements-dev.txt`)
 
 ## Instalación
 
-Secuencia completa, del clone al arranque. Ejecuta los pasos en orden. Desde el paso 3, los comandos de `python`/`pip` corresponden al intérprete del venv (ver [intérprete del venv](#intérprete-del-venv)).
-
 ### 1. Requisitos previos
 
-Necesitas Git, Python con soporte de venv y los binarios `ffmpeg`/`ffprobe` (los requiere yt-dlp para fusionar audio y los tests).
+- **Python 3.11 o superior**
+- **Git**
+- **ffmpeg y ffprobe** (los usa yt-dlp para fusionar video/audio y extraer MP3)
 
+**Linux / macOS:**
 ```bash
-# Debian / Ubuntu
-sudo apt update && sudo apt install -y git python3 python3-venv ffmpeg
+sudo apt update && sudo apt install -y ffmpeg
 ```
 
-```bash
-# Fedora / RHEL
-sudo dnf install -y git python3 python3-virtualenv ffmpeg
-```
+> En Fedora: `sudo dnf install ffmpeg`. En Arch: `sudo pacman -S ffmpeg`. En macOS con Homebrew: `brew install ffmpeg` (suele venir ya incluido en formularias de yt-dlp).
 
-```bash
-# Arch Linux
-sudo pacman -S --noconfirm git python python-virtualenv ffmpeg
-```
+**Windows:**
+Descarga los binarios desde [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) y añade la carpeta `bin` al `PATH`.
 
-```bash
-# macOS (requiere Homebrew)
-brew install git python ffmpeg
-```
-
-```powershell
-# Windows (PowerShell)
-winget install --id Git.Git -e
-winget install --id Python.Python.3.12 -e
-winget install --id Gyan.FFmpeg -e
-```
-
-En Windows, si `winget` no está disponible, descarga los instaladores oficiales de Python, Git y FFmpeg desde sus páginas de descarga y añade sus carpetas `bin` al `PATH`.
+Para verificar: `ffmpeg -version` debe imprimir la versión sin errores.
 
 ### 2. Clonar el repositorio
 
@@ -73,62 +45,33 @@ cd MultiBot
 
 ### 3. Crear y activar el entorno virtual
 
+**Linux / macOS:**
 ```bash
-# Linux / macOS
-python3 -m venv venv
+python -m venv venv
 source venv/bin/activate
 ```
 
+**Windows (PowerShell):**
 ```powershell
-# Windows (PowerShell)
 python -m venv venv
 venv\Scripts\Activate.ps1
 ```
 
+**Windows (CMD):**
 ```cmd
-# Windows (CMD)
 python -m venv venv
 venv\Scripts\activate.bat
 ```
 
-#### Intérprete del venv
+El venv es obligatorio: los paquetes se instalan ahí, aislados del Python del sistema. Además evita el bloqueo PEP 668 (`externally-managed-environment`) de muchas distros.
 
-Verifica que el comando `python` apunta al binario del venv:
-
-```bash
-# Linux / macOS
-which python
-```
-
-```powershell
-# Windows (PowerShell)
-where.exe python
-```
-
-La salida debe ser una ruta dentro de `venv/` (por ejemplo `/home/usuario/MultiBot/venv/bin/python` o `venv\Scripts\python.exe`). Si muestra el intérprete del sistema, el venv no está activado. Todos los comandos de ejecución de este README corren con el venv activado y usan `python` como binario canónico.
-
-### 4. Crear `.env` desde la plantilla
+### 4. Configurar `.env`
 
 ```bash
-# Linux / macOS
 cp .env.example .env
 ```
 
-```powershell
-# Windows (PowerShell)
-Copy-Item .env.example .env
-```
-
-```cmd
-# Windows (CMD)
-copy .env.example .env
-```
-
-Edita `.env` y rellena las variables obligatorias (tabla [Variables de entorno](#variables-de-entorno)). El bot aborta al arrancar si falta alguna:
-
-```
-Error: falta la variable de entorno BOT_TOKEN
-```
+Edita `.env` y rellena **`BOT_TOKEN`** (de @BotFather) y **`GROQ_API_KEY`** (formato `gsk_...`). El programa carga `.env` automáticamente al arrancar (`load_dotenv()` en `multibot.py`, antes de importar la configuración), así que solo con que el archivo exista y esté relleno basta.
 
 ### 5. Instalar dependencias
 
@@ -136,11 +79,7 @@ Error: falta la variable de entorno BOT_TOKEN
 pip install -r requirements.txt
 ```
 
-Solo si vas a correr los tests, instala también las dependencias de desarrollo:
-
-```bash
-pip install -r requirements-dev.txt
-```
+> Para ejecutar la suite de tests, instala además: `pip install -r requirements-dev.txt`
 
 ### 6. Ejecutar
 
@@ -148,24 +87,23 @@ pip install -r requirements-dev.txt
 python multibot.py
 ```
 
-Deberías ver `Bot corriendo...` en la consola y el servidor Flask escuchando en el puerto `7860`.
+Todos los comandos de ejecución corren con el venv activado. Si dudas de qué intérprete estás usando, verifica:
 
-## Variables de entorno
+```bash
+which python
+```
 
-Verificadas en `.env.example` y `bot/config.py`.
+La salida debe apuntar dentro de tu venv (por ejemplo `/home/tu_usuario/MultiBot/venv/bin/python`).
 
-| Variable | Requerida | Descripción | Valor por defecto |
-| --- | --- | --- | --- |
-| `BOT_TOKEN` | sí | Token del bot creado con @BotFather | — (aborta si falta) |
-| `GROQ_API_KEY` | sí | API key de Groq (formato `gsk-...`) | — (aborta si falta) |
-| `TIKWM_API_URL` | no | Endpoint de la API TikWM (slides de TikTok y fallbacks) | `https://www.tikwm.com/api/` |
-| `BOT_API_BASE_URL` | no | Base URL de la API de Telegram (útil tras un proxy) | `https://multi-api-production.up.railway.app/bot` |
-| `IG_SESSION` | no | Archivo de sesión de Instaloader | `ig_session` |
-| `GROQ_MODEL` | no | Modelo Groq para `/wiki` | `llama-3.3-70b-versatile` |
-| `GROQ_TEMPERATURE` | no | Temperatura de las respuestas de Groq | `0.3` |
-| `GROQ_MAX_TOKENS` | no | Límite de tokens de respuesta de Groq | `500` |
+## Uso
 
-Nunca versiones `.env` (está en `.gitignore`); el repo solo mantiene `.env.example`.
+Una vez corriendo, el bot responde en cualquier chat de Telegram donde esté añadido:
+
+| Comando / entrada | Qué hace |
+| --- | --- |
+| Enlace de TikTok / Instagram / Facebook | Descarga y reenvía el video (o slideshow/carrusel con su audio MP3) |
+| `find <cancion>` | Busca el primer resultado en SoundCloud y envía el MP3 con su thumbnail |
+| `/wiki <consulta>` | Respuesta enciclopédica de 2-4 líneas vía Groq |
 
 ## Tests
 
@@ -174,26 +112,42 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-La suite aísla `downloads/` en una carpeta temporal y bloquea peticiones de red reales durante los tests (`tests/conftest.py`). Los tests marcados como `ffmpeg` se omiten si los binarios `ffmpeg`/`ffprobe` no están disponibles (marker declarado en `pytest.ini`).
+Suite de 9 archivos en `tests/` con mocks de Telegram/yt-dlp/Instaloader/Groq/TikWM: fail-fast de configuración, pipeline de video (con y sin audio), slides/carrusel, SoundCloud, `/wiki` y utilidades. Requiere ffmpeg/ffprobe para los casos de medios reales (marker `ffmpeg`); la red externa está bloqueada fuera de los mocks.
 
 ## Docker
 
-La imagen base `python:3.11-slim` ya incluye ffmpeg (Dockerfile). El contenedor corre como usuario `app` (uid 1001) y arranca con `python3 multibot.py`.
+El Dockerfile usa `python:3.11-slim`, instala ffmpeg y ejecuta `multibot.py` como usuario no root.
 
 ```bash
 docker build -t multibot .
-docker run --rm -e BOT_TOKEN=... -e GROQ_API_KEY=... multibot
+docker run --env-file .env -p 7860:7860 multibot
 ```
+
+## Environment
+
+Definidas en `bot/config.py` y documentadas en `.env.example`. Las dos obligatorias abortan el arranque si faltan (fail-fast).
+
+| Variable | Obligatoria | Default | Descripción |
+| --- | --- | --- | --- |
+| `BOT_TOKEN` | sí | — | Token del bot (de @BotFather) |
+| `GROQ_API_KEY` | sí | — | API key de Groq (formato `gsk_...`) |
+| `TIKWM_API_URL` | no | `https://www.tikwm.com/api/` | Endpoint TikWM (slides de TikTok y fallbacks de audio) |
+| `BOT_API_BASE_URL` | no | `https://multi-api-production.up.railway.app/bot` | Base URL de la API de Telegram (útil tras un proxy) |
+| `IG_SESSION` | no | `ig_session` | Ruta del archivo de sesión de Instagram (Instaloader) |
+| `GROQ_MODEL` | no | `llama-3.3-70b-versatile` | Modelo Groq para `/wiki` |
+| `GROQ_TEMPERATURE` | no | `0.3` | Temperatura de las respuestas de Groq |
+| `GROQ_MAX_TOKENS` | no | `500` | Límite de tokens de respuesta |
 
 ## Troubleshooting
 
 | Error | Causa | Solución |
 | --- | --- | --- |
-| `ModuleNotFoundError: No module named 'telegram'` | El paquete `python-telegram-bot` se importa como `telegram`; el error indica intérprete del sistema o venv sin activar | Activa el venv antes de ejecutar: `source venv/bin/activate` (o lanza directo con `venv/bin/python multibot.py`) |
-| `Error: falta la variable de entorno BOT_TOKEN` | Variable obligatoria sin rellenar | Edita `.env` (paso 4) o exporta la variable antes del paso 6 |
-| `Error: falta la variable de entorno GROQ_API_KEY` | Variable obligatoria sin rellenar | Edita `.env` (paso 4) o exporta la variable antes del paso 6 |
-| `error: externally-managed-environment` (PEP 668) | `pip` corriendo en el intérprete del sistema, no en el venv | Crea y activa el venv (paso 3) antes de instalar dependencias |
-| `ffmpeg`/`ffprobe` no encontrados | Binarios de sistema ausentes | Instálalos con el comando de tu distro/SO del paso 1 |
-| Video sin audio en TikTok | yt-dlp no consiguió pista de audio | Automático: el bot usa la API TikWM como fallback (`ensure_tiktok_audio`) |
+| `Error: falta la variable de entorno BOT_TOKEN` | Token sin rellenar en `.env` | Rellenar `BOT_TOKEN` en `.env` (paso 4) y reiniciar |
+| `Error: falta la variable de entorno GROQ_API_KEY` | API key sin rellenar en `.env` | Rellenar `GROQ_API_KEY` en `.env` (paso 4) y reiniciar |
+| `ModuleNotFoundError: No module named 'telegram'` | El paquete pip `python-telegram-bot` no está instalado: venv no activado o intérprete equivocado | Activar el venv (`source venv/bin/activate`) o usar `<venv>/bin/python multibot.py`; reinstalar con `pip install -r requirements.txt` |
+| `error: externally-managed-environment` (PEP 668) | `pip install` ejecutado con el Python del sistema, que rechaza paquetes externos | Crear y activar el venv (paso 3) y repetir el `pip install` dentro |
+| `ffmpeg: command not found` / ffprobe ausente | Binarios de ffmpeg no instalados o fuera del `PATH` | Instalar ffmpeg/ffprobe (paso 1) y verificar con `ffmpeg -version` |
 
-> **Estructura del repositorio:** consulta [STRUCTURE.md](STRUCTURE.md) para saber dónde se edita cada comportamiento.
+---
+
+> **Estructura del repositorio:** consultar [STRUCTURE.md](STRUCTURE.md).
