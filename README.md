@@ -1,249 +1,99 @@
 # MultiBot
 
-Bot de Telegram en Python que descarga y reenvía contenido de TikTok, Instagram, Facebook y SoundCloud, y responde consultas informativas mediante `/wiki` usando Groq.
+Bot de Telegram en Python que descarga y envía media desde TikTok, Instagram, Facebook y SoundCloud, e incluye un comando `/wiki` con respuestas generadas por Groq.
 
-Diseñado para ejecutarse en un entorno con Python 3.11 (Docker) y consumir credenciales exclusivamente desde variables de entorno.
+`git clone https://github.com/Juancit015/MultiBot.git`
 
-## Estado actual
+## Qué hace
 
-> Estado documentado sobre el working tree actual. El historial fue saneado (53 commits): los archivos de cookies/sesiones y las credenciales dejaron de trackearse y se purgaron del historial. El repositorio no contiene secretos ni credenciales reales.
+- Detecta enlaces de TikTok, Instagram y Facebook en cualquier mensaje y los descarga con `yt-dlp` (con fallbacks vía TikWM para TikTok y audio de la API nativa de TikTok).
+- Convierte y compone audio/video con FFmpeg (`bot/services/ffmpeg.py`) y reenvía el resultado adaptado al límite de Telegram (`LIMITE_MB=2000`).
+- `find <cancion>` busca y envía pistas de SoundCloud (`bot/handlers/soundcloud.py`).
+- `/wiki <consulta>` responde consultas con Groq (`bot/handlers/wiki.py`).
+- Acepta sesiones de cookies (TikTok, Instagram, Facebook, YouTube) para descargas autenticadas.
 
-- HEAD `d357259` (historial saneado) con mejoras posteriores sin commitear en el working tree: hardening del `Dockerfile`, `requirements.txt` con rangos, suite de tests pytest (27 tests) y esta documentación.
-- Credenciales rotadas: `BOT_TOKEN`, `GROQ_API_KEY` y cookies/sesiones **no** están en el repositorio (ver [Seguridad](#consideraciones-de-seguridad)).
+## Stack
 
-## Funcionalidades implementadas
-
-| Plataforma | Soporte |
-|---|---|
-| TikTok | Videos y slideshows (gallery de fotos) con audio |
-| Instagram | Posts enlazados, carruseles (varias fotos), stories, reels, IGTV |
-| Facebook | Videos (incluida conversión de `/reel/` a `watch?v=`) |
-| SoundCloud | Búsqueda `find <cancion>` y descarga de audio |
-
-Además:
-
-- `/wiki <consulta>` — responde preguntas informativas vía Groq (modelo `llama-3.3-70b-versatile` configurable).
-- `/start` — mensaje de bienvenida con instrucciones.
-- Detección automática de plataforma a partir del enlace.
-- Límite de tamaño de video (`LIMITE_MB`) y reintentos de descarga (yt-dlp).
-
-## Arquitectura
-
-```
-Config → Handlers → Services → (yt-dlp / ffmpeg / tikwm / groq / requests) → respuesta al chat
-```
-
-```
-multibot.py                Entry point: valida env, configura el bot y arranca polling
-bot/
-  config.py                Centraliza toda la configuración (env vars, rutas, regex)
-  handlers/                Orquestación por dominio (media, wiki, por plataforma)
-  services/                Lógica aislada de infraestructura (yt-dlp, ffmpeg, tikwm, groq, red)
-  utils/                   Utilidades transversales (mensajes, formateo de texto)
-tests/                     Suite de tests pytest (mocks de Telegram/Groq/tikwm/instaloader)
-```
-
-Flujo de arranque (`multibot.py`):
-
-1. `_validar_config()` comprueba `BOT_TOKEN` y `GROQ_API_KEY` (aborta si faltan).
-2. Se registran los handlers en `Application` (python-telegram-bot).
-3. Se inicia un servidor Flask auxiliar en `0.0.0.0:7860` (daemon) para health-checks del host.
-4. `app.run_polling()` escucha actualizaciones de Telegram.
+- Backend: Python (`.py` con `match` → requiere **Python ≥ 3.10**; el `Dockerfile` usa `python:3.11-slim`).
+- Telegram: `python-telegram-bot` ≥ 21 (`multibot.py`).
+- Descargas: `yt-dlp` ≥ 2025.1.1 + `instaloader` (Instagram).
+- Fallbacks/metadatos: TikWM API, API nativa de TikTok.
+- `/wiki`: SDK `groq`.
+- Servicio auxiliar: Flask (port `7860`) para el health-check/keep-alive del bot.
+- Buffer HTTP: `httpx` con `HTTPXRequest` en `Application.builder()`.
+- Requisito externo: **FFmpeg/FFprobe** invocados por `PATH` (`bot/services/ffmpeg.py`).
 
 ## Requisitos
 
-- Python **3.11** (imagen Docker) o compatible.
-- `ffmpeg` y `ffprobe` en el PATH (merge de audio y detección de pistas). Instalación en Debian/Ubuntu: `apt-get install -y ffmpeg`.
-- Token de bot creado con [@BotFather](https://t.me/BotFather).
-- Clave de la [API de Groq](https://console.groq.com/) (formato `gsk_...`).
-- Opcional: archivos de cookies y sesión de Instagram para contenido restringido (ver [Limitaciones](#limitaciones-de-cookies-y-sesiones)).
-- Para ejecutar la suite de tests: `pytest` + `pytest-asyncio` (ver [Testing](#testing)) y `ffmpeg`/`ffprobe` para los tests marcados `ffmpeg`.
+- Python ≥ 3.10 (cualquier binario `python` del sistema; no hace falta una versión fija).
+- FFmpeg y FFprobe en `PATH` (el código los invoca como `ffmpeg`/`ffprobe`):
+  - **Arch Linux:** `sudo pacman -S ffmpeg`
+  - **Debian/Ubuntu:** `sudo apt install ffmpeg`
+  - **Windows:** `winget install ffmpeg`
 
-## Instalación local
+## Setup
 
 ```bash
-git clone https://github.com/Juancit015/MultiBot.git
-cd MultiBot
-
-python3.11 -m venv .venv
-source .venv/bin/activate
-
+python -m venv .venv          # usa el binario `python` del sistema (>= 3.10)
+source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env          # rellena BOT_TOKEN y GROQ_API_KEY
 ```
 
-> Algunas plataformas requieren una versión reciente de `yt-dlp`. Si hay errores de extracción, actualízalo manualmente:
+El venv se crea con el `python` del sistema: PEP 668 impide `pip install` global en varias distros (Arch, Debian 12+), pero dentro de un venv la instalación funciona sin `--break-system-packages`. No uses un binario `python3.11` fuera de la imagen Docker: en muchos sistemas host no existe.
+
+Copia los archivos `cookies*.txt` e `ig_session` (de tu propia sesión) en la raíz si quieres descargas autenticadas.
+
+## Run
 
 ```bash
-pip install -U yt-dlp
-```
-
-## Configuración
-
-Copia el archivo de ejemplo y rellena los valores:
-
-```bash
-cp .env.example .env
-# edita .env con tus valores
-```
-
-> **Importante**: `.env` está en `.gitignore` — nunca debe versionarse.
-
-### Obligatorias (el bot aborta si faltan)
-
-| Variable | Descripción |
-|---|---|
-| `BOT_TOKEN` | Token del bot de Telegram creado con @BotFather |
-| `GROQ_API_KEY` | API key de Groq (formato `gsk_...`) |
-
-### Opcionales (valor por defecto en `bot/config.py`)
-
-| Variable | Default | Descripción |
-|---|---|---|
-| `TIKWM_API_URL` | `https://www.tikwm.com/api/` | Endpoint API TikWM (slides de TikTok, fallbacks) |
-| `BOT_API_BASE_URL` | `https://multi-api-production.up.railway.app/bot` | Base URL de la API de Telegram (útil tras un proxy de Telegram) |
-| `IG_SESSION` | `ig_session` | Ruta del archivo de sesión de Instagram (Instaloader) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Modelo Groq para `/wiki` |
-| `GROQ_TEMPERATURE` | `0.3` | Temperatura de la respuesta |
-| `GROQ_MAX_TOKENS` | `500` | Límite de tokens de respuesta |
-
-## Uso
-
-```bash
-source .venv/bin/activate
 python multibot.py
 ```
 
-En Telegram:
+El bot exige `BOT_TOKEN` y `GROQ_API_KEY` (aborta si faltan, ver `_validar_config`). Levanta un servidor Flask en el puerto `7860` y arranca el long-pooling contra la API de Telegram.
 
-1. Abre tu bot y pídele que inicie (o escribe `/start`).
-2. Pega un enlace de TikTok, Instagram o Facebook → el bot descarga y envía el video/imágenes.
-3. Escribe `find <cancion>` → busca y envía el audio de SoundCloud.
-4. Usa `/wiki <tema>` para obtener una respuesta informativa.
-5. `/start` muestra el mensaje de bienvenida.
+## Environment
 
-## Testing
+| Variable | Requerida | Descripción |
+| --- | --- | --- |
+| `BOT_TOKEN` | sí | Token del bot de @BotFather |
+| `GROQ_API_KEY` | sí | API key de Groq para `/wiki` |
+| `TIKWM_API_URL` | no | Endpoint TikWM (por defecto `https://www.tikwm.com/api/`) |
+| `BOT_API_BASE_URL` | no | Base URL de la API de Telegram (por defecto proxy Railway) |
+| `IG_SESSION` | no | Archivo de sesión de Instaloader (por defecto `ig_session`) |
+| `GROQ_MODEL` | no | Modelo Groq (por defecto `llama-3.3-70b-versatile`) |
+| `GROQ_TEMPERATURE` | no | Temperatura de Groq (por defecto `0.3`) |
+| `GROQ_MAX_TOKENS` | no | Límite de tokens de respuesta (por defecto `500`) |
 
-Suite de regresión de **27 tests pytest**, aislada de credenciales, Telegram, Groq y APIs externas (mocks de Telegram, Groq, TikWM, Instaloader y yt-dlp en `tests/mocks/`).
-
-```bash
-# Dependencias de desarrollo
-pip install -r requirements-dev.txt
-
-# Suite completa
-pytest
-
-# Solo los tests que requieren FFmpeg real
-pytest -m ffmpeg
-```
-
-Notas:
-
-- Los tests marcados `ffmpeg` (5) ejercitan `bot/services/ffmpeg.py` de verdad (probe de audio, extracción y merge) y se **omiten** si `ffmpeg`/`ffprobe` no están en el PATH.
-- Los medios de prueba se generan en tiempo de ejecución (lavfi) en `/tmp` — no se versionan binarios.
-- Ejecución dentro del contenedor de la imagen:
-
-```bash
-docker run --rm -v $PWD:/app -w /app multibot sh -c "pip install -q -r requirements-dev.txt && pytest"
-```
+Los archivos descargados se guardan en `downloads/` (`BASE_DIR` en `bot/config.py`).
 
 ## Docker
 
-### Build y ejecución
-
 ```bash
 docker build -t multibot .
-docker run --rm \
-  -e BOT_TOKEN="tu_token" \
-  -e GROQ_API_KEY="tu_gsk_key" \
-  multibot
+docker run --rm -e BOT_TOKEN=TU_TOKEN -e GROQ_API_KEY=TU_KEY multibot
 ```
 
-- Imagen base `python:3.11-slim`; instala `ffmpeg` y las dependencias de `requirements.txt`.
-- Ejecuta como usuario no-root `app` (uid/gid 1001); solo `/app/downloads` es escribible.
-- Las variables de entorno se pasan **en runtime**; nunca hay que incorporarlas a la imagen.
+La imagen base es `python:3.11-slim` e instala FFmpeg en el build; corre como usuario no-root en `/app` con `downloads/` escribible (ver `Dockerfile`).
 
-## Estructura de directorios
-
-```
-.
-├── bot/
-│   ├── __init__.py
-│   ├── config.py            Configuración central (env, rutas, regex)
-│   ├── handlers/
-│   │   ├── generic.py       Pipeline de video genérico
-│   │   ├── instagram.py     Carruseles + instaloader
-│   │   ├── tiktok.py        Slideshows (gallery de fotos)
-│   │   ├── soundcloud.py    Búsqueda `find <cancion>`
-│   │   ├── media.py         Router principal
-│   │   └── wiki.py          Handler de `/wiki`
-│   ├── services/
-│   │   ├── ffmpeg.py        Fusiona y extrae audio
-│   │   ├── groq.py          Cliente Groq y manejo de fallos
-│   │   ├── net.py           fetch / resolución de URLs acortadas
-│   │   ├── tikwm.py         API TikWM
-│   │   └── ytdlp.py         Descarga con reintentos
-│   └── utils/
-│       ├── messaging.py     safe_edit / safe_delete
-│       └── text.py          Regex, URLs, construcción de títulos
-├── tests/
-│   ├── mocks/               Telegram, Groq, TikWM, Instaloader, yt-dlp simulados
-│   ├── conftest.py          Fixtures (medios ffmpeg, aislamiento BASE_DIR, anti-red)
-│   └── test_*.py            27 tests de regresión
-├── downloads/               Carpeta de trabajo (ignorada por git)
-├── multibot.py              Entry point
-├── pytest.ini               Configuración de pytest (asyncio_mode, marker ffmpeg)
-├── requirements.txt         Dependencias de producción
-├── requirements-dev.txt     Dependencias de desarrollo (pytest)
-└── Dockerfile
-```
-
-## Limitaciones de cookies y sesiones
-
-- **Descargas públicas** funcionan sin credenciales mediante `yt-dlp`.
-- Para **contenido restringido** (cuentas privadas o límites) se usan archivos de cookies en **formato Netscape**:
-  - `cookies.txt` (TikTok)
-  - `cookies_ig.txt` (Instagram)
-  - `cookiesFB.txt` (Facebook)
-- Los **carruseles de Instagram** usan **Instaloader** con una sesión: archivo `ig_session` (variable `IG_SESSION`).
-- Estos archivos **no están en el repositorio**: se eliminó su tracking y se purgaron del historial, y están en `.gitignore` como bloque. El bot los busca en la raíz del proyecto en runtime; si no existen, intenta descargar sin ellos (y puede fallar ante cuentas privadas/restricciones de la plataforma).
-- Obtener estos archivos implica iniciar sesión manualmente y exportar cookies a formato Netscape; es un proceso externo al proyecto y sujeto a los términos de servicio de cada plataforma.
-
-## Consideraciones de seguridad
-
-- **Sin secretos en el repositorio**: las credenciales solo viven en variables de entorno.
-- **Fail-fast**: el bot aborta si faltan `BOT_TOKEN` o `GROQ_API_KEY`.
-- Archivos sensibles en `.gitignore`: `cookies*.txt`, `ig_session`, `instagram_session`, `fb_session`, `*.session`, `.env`, `.env.*` (con excepción para `.env.example`).
-- **Historial saneado**: se usó Git filter-repo; los secretos ya no existen en ningún commit, y la recomendación es no volver a subir archivos sensibles (revisar `git status` antes de commitear).
-- Los logs no imprimen credenciales.
-- El contenedor ejecuta como usuario **no-root** (`app`), minimizando el impacto de un hipotético compromiso.
-- `yt-dlp` usa internamente `nocheckcertificate=True` (compromiso común de la herramienta; asume una red de confianza).
-
-## Despliegue (Railway u otro PaaS)
-
-1. Conecta el repositorio a **Railway** (o despliega la imagen construida).
-2. Define las variables de entorno en **Settings → Variables**:
-   - Obligatorias: `BOT_TOKEN`, `GROQ_API_KEY`.
-   - Opcionales: `TIKWM_API_URL`, `BOT_API_BASE_URL`, `IG_SESSION`, `GROQ_MODEL`, `GROQ_TEMPERATURE`, `GROQ_MAX_TOKENS`.
-3. El contenedor ejecuta `CMD ["python3", "multibot.py"]`.
-
-Notas:
-
-- Ajusta `BOT_API_BASE_URL` si por proxy de Telegram la API pública no es accesible en tu región.
-- Es un proceso de **long-running** (long-polling): configura el servicio como **On**, no como one-shot.
-- El contenedor incluye `ffmpeg` (necesario para merge/extract de audio).
-
-## Verificaciones de seguridad
+## Tests
 
 ```bash
-# Secretos en el historial (0 resultados esperados)
-git grep -n -E "gsk_[A-Za-z0-9]{20,}|[0-9]{6,13}:[A-Za-z0-9_-]{30,}" $(git rev-list --all) | wc -l
-
-# Archivos sensibles deben estar ignorados
-git check-ignore cookies.txt ig_session .env .env.example 2>/dev/null
+pip install -r requirements-dev.txt
+pytest
 ```
 
-## Licencia
+Suite de 27 tests con mocks de Telegram/TikWM/yt-dlp/Groq/Instaloader (`tests/mocks/`). El marcador `ffmpeg` requiere FFmpeg en el sistema.
 
-Sin licencia definida en el repositorio.
+## Estructura
+
+- `multibot.py` — entry point: validación + polling + Flask.
+- `bot/config.py` — variables de entorno, rutas y patrones URL.
+- `bot/handlers/` — comandos y despacho de media por plataforma.
+- `bot/services/` — yt-dlp, FFmpeg, TikWM, Groq y red.
+- `bot/utils/` — helpers de texto y envío.
+- `tests/` — suite pytest.
+- `downloads/` — salida de descargas.
+- `.env.example` — plantilla de variables de entorno.
 
 > **Estructura del repositorio:** consultar [STRUCTURE.md](STRUCTURE.md).
