@@ -245,3 +245,4 @@ git check-ignore cookies.txt ig_session .env .env.example 2>/dev/null
 ## Licencia
 
 Sin licencia definida en el repositorio.
+# MultiBot
