@@ -1,6 +1,6 @@
 # Nota: los rangos (>=, <) mejoran el control de compatibilidad
 # pero NO constituyen reproducibilidad estricta.
-python-telegram-bot>=21.0,<22.0
+python-telegram-bot>=22.0,<23.0
 yt-dlp>=2025.1.1
 groq>=0.10.0
 flask>=3.0.0

@@ -1,14 +1,19 @@
-# CHANGELOG
+# Changelog
 
-Todas las entradas de este archivo corresponden a cambios reales verificados en el estado actual del repositorio.
+Todas las entradas se documentan con fecha y tienen formato [Keep a Changelog](https://keepachangelog.com/).
 
-## [2026-08-09]
+## 2026-08-09
 
-### Changed
+### Cambiado
 
-- `requirements.txt`: añadido `python-dotenv>=1.0.0`.
-- `multibot.py`: añadido `load_dotenv()` que lee `.env` automáticamente al arrancar, antes de importar `bot.config`.
-- Documentación regenerada desde cero verificando el estado actual del repo (SSOT): README.md, CHANGELOG.md y STRUCTURE.md reescritos sin consultar versiones previas.
-- `README.md`: instalación como secuencia numerada que arranca en el clone; etiquetas de SO (`Linux / macOS`, `Windows (PowerShell)`, `Windows (CMD)`) fuera de los bloques de código, comandos únicos copiables; binario canónico `python` del venv (verificable con `which python`); tabla de variables de entorno extraída de `bot/config.py`; tabla de troubleshooting con mensajes de error literales del programa (`BOT_TOKEN`, `GROQ_API_KEY`, `ModuleNotFoundError: No module named 'telegram'`, PEP 668, ffmpeg); documentado que `.env` se carga automáticamente al arrancar.
-- `STRUCTURE.md`: mapa de arquitectura en capas (entry point, handlers, services, utils, tests y mocks) con tabla "Dónde se edita cada cosa", incluida la fila de la carga de `.env` (`multibot.py` → `load_dotenv()`).
-- URL de `git clone` documentada como pública HTTPS (`https://github.com/Juancit015/MultiBot.git`) pese a que el remote configurado es SSH.
+- `python-telegram-bot` ahora se declara como `>=22.0,<23.0` en `requirements.txt`. Las versiones 21.x y anteriores son incompatibles con Python 3.12+ y fallaban al arrancar con `RuntimeError: There is no current event loop`. Arranque verificado en Python 3.11 (Dockerfile) y en Python 3.14 (host).
+
+### Corregido
+
+- `multibot.py` ahora llama a `load_dotenv()` antes de importar `bot/config.py`, de modo que las variables de la API (como `BOT_API_BASE_URL`, usada tras un proxy de Telegram) sí se leen del `.env` al arrancar y no solo las que ya estuvieran exportadas en el entorno.
+
+### Documentación
+
+- `README.md`, `CHANGELOG.md` y `STRUCTURE.md` regenerados desde cero con verificación directa contra el repositorio (runtime, dependencias, `.env.example`, entry point y errores literales).
+- Documentada la secuencia de instalación completa (requisitos previos por SO, clone, venv, `.env`, dependencias, ejecución) y la tabla de troubleshooting con el error `RuntimeError: There is no current event loop` y su fix.
+- Corregida la URL de clone del README a la pública `https://github.com/Juancit015/MultiBot.git` (el remote es SSH).
