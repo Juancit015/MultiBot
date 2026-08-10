@@ -1,157 +1,186 @@
 # MultiBot
 
-Bot de Telegram que descarga y envía videos de **TikTok**, **Instagram** y **Facebook**, extrae el audio y busca canciones en **SoundCloud**. Incluye un comando `/wiki` que responde consultas enciclopédicas mediante la API de **Groq** (modelo Llama).
+Bot de Telegram en Python que descarga y reenvía contenido de TikTok, Instagram y Facebook (videos, carruseles, slides y stories), busca canciones en SoundCloud con `find <cancion>` y responde consultas enciclopédicas con `/wiki <consulta>` usando Groq.
 
-Funciona por mensaje directo: envía el enlace de una publicación (o `find <cancion>` para SoundCloud) y el bot responde con el video/audio dentro de Telegram.
+- Descarga de videos TikTok / Instagram / Facebook con yt-dlp.
+- Carruseles de Instagram (`/p/...`) con Instaloader y slides de TikTok (`/photo/...`) con TikWM + yt-dlp.
+- Extracción y fusión de audio con FFmpeg (envía MP3 separado).
+- Búsqueda de audio en SoundCloud (`find <cancion>`).
+- Consultas informativas con Groq (`/wiki <consulta>`).
+- Servidor Flask interno en el puerto `7860` (healthcheck, se inicia junto al bot).
 
 ## Stack
 
-- **Python** — 3.11+ (probado en 3.11 con el Dockerfile `python:3.11-slim` y en 3.14 en el host).
-- **python-telegram-bot** — `>=22.0,<23.0`. Se importa como `telegram`. Las versiones `<22.0` fallan con Python 3.12+ (`RuntimeError: There is no current event loop`).
-- **Flask** — `>=3.0.0`. Solo sirve de health-endpoint pasivo en `:7860`, en un hilo `daemon` secundario.
-- **yt-dlp** — `>=2025.1.1`. Descarga de TikTok, Instagram, Facebook y SoundCloud.
-- **groq** — `>=0.10.0`. Backend del comando `/wiki`.
-- **instaloader** — `>=4.11.0`. Carruseles y slides de Instagram (`/p/...`).
-- **python-dotenv** — `>=1.0.0`. Carga `.env` al arrancar.
-- **requests** — `>=2.31.0`, **httpx** — `>=0.27.0`. Clientes HTTP internos.
-- **FFmpeg** — binario de sistema (`ffmpeg`/`ffprobe`): incrusta MP3 en el video, extrae audio y es requerido por la suite de tests.
-- **Tests** — `pytest>=8,<9` + `pytest-asyncio>=0.23,<1` (ver `requirements-dev.txt`).
+| Componente | Versión verificada | Fuente |
+| --- | --- | --- |
+| Python | 3.11 (imagen) / 3.14 host | `Dockerfile` (`python:3.11-slim`); smoke test en 3.14.6 |
+| python-telegram-bot | 22.8 (`>=22.0,<23.0`) | `requirements.txt` |
+| yt-dlp | 2026.7.4 (`>=2025.1.1`) | `requirements.txt` |
+| groq | 1.6.0 (`>=0.10.0`) | `requirements.txt` |
+| Flask | 3.1.3 (`>=3.0.0`) | `requirements.txt` |
+| requests | 2.34.2 (`>=2.31.0`) | `requirements.txt` |
+| httpx | 0.28.1 (`>=0.27.0`) | `requirements.txt` |
+| instaloader | 4.15.3 (`>=4.11.0`) | `requirements.txt` |
+| python-dotenv | 1.2.2 (`>=1.0.0`) | `requirements.txt` |
+| pytest (dev) | 8.4.2 (`>=8,<9`) | `requirements-dev.txt` |
 
-## Instalación
+Rango de runtime documentado con respaldo: **Python 3.11+**, probado en 3.11 (imagen del Dockerfile) y 3.14.6 (host del smoke test: arranque + suite completa). `python-telegram-bot` 22.x requiere Python >= 3.10.
+
+## Características
+
+| Comando / entrada | Qué hace |
+| --- | --- |
+| Enlace de TikTok / Instagram / Facebook | Descarga y reenvía el video (con audio incrustado y MP3 aparte) |
+| Enlace TikTok con `/photo/` | Slides con audio, vía TikWM |
+| Enlace Instagram con `/p/` | Carrusel de fotos, vía Instaloader |
+| `find <cancion>` | Búsqueda y descarga de audio en SoundCloud |
+| `/wiki <consulta>` | Consulta enciclopédica con Groq (modelo `llama-3.3-70b-versatile`) |
+| `/start` | Mensaje de bienvenida |
+
+## Instalación y ejecución
 
 ### 1. Requisitos previos
 
-- **Python 3.11+ con `venv`** (probado en 3.11 y 3.14). En Debian/Ubuntu el paquete es `python3-venv`.
-- **Git**.
-- **FFmpeg** — necesario para la fusión/extracción de audio y para los tests.
+Necesitas **Python 3.11+**, **Git** y los binarios **ffmpeg/ffprobe** (los usa yt-dlp y el pipeline de audio).
 
-Instala FFmpeg según tu sistema:
+Instala todo por SO:
 
-Debian / Ubuntu:
-
-```bash
-sudo apt install ffmpeg
+Debian / Ubuntu (apt):
+```
+sudo apt update && sudo apt install -y python3 python3-venv git ffmpeg
 ```
 
-Fedora / RHEL:
-
-```bash
-sudo dnf install ffmpeg
+Fedora (dnf):
+```
+sudo dnf install -y python3 python3-virtualenv git ffmpeg
 ```
 
-Arch Linux:
-
-```bash
-sudo pacman -S ffmpeg
+Arch / Manjaro (pacman):
+```
+sudo pacman -S --noconfirm python python-virtualenv git ffmpeg
 ```
 
-macOS (con Homebrew):
-
-```bash
-brew install ffmpeg
+macOS (Homebrew):
+```
+brew install python@3.12 git ffmpeg
 ```
 
-Windows (con winget):
-
-```bash
-winget install Gyan.FFmpeg
+Windows (winget):
 ```
+winget install Python.Python.3.12 Git.Git Gyan.FFmpeg
+```
+
+En macOS el comando `python3` del sistema puede ser muy antiguo: si tras instalarlo `python3 --version` no reporta 3.11+, usa el interpretado de Homebrew con `export PATH="/opt/homebrew/opt/python@3.12/bin:$PATH"` (o `$(brew --prefix)/opt/python@3.12/bin/python3`).
 
 ### 2. Clonar el repositorio
 
-```bash
-git clone https://github.com/Juancit015/MultiBot.git
-cd MultiBot
+```
+git clone https://github.com/Juancit015/MultiBot.git && cd MultiBot
 ```
 
 ### 3. Crear y activar el entorno virtual
 
+```
+python3 -m venv venv
+```
+
 Linux / macOS:
 
-```bash
-python3 -m venv venv
+```
 source venv/bin/activate
 ```
 
 Windows (PowerShell):
 
-```powershell
-py -m venv venv
+```
 venv\Scripts\Activate.ps1
 ```
 
 Windows (CMD):
 
-```cmd
-py -m venv venv
+```
 venv\Scripts\activate.bat
 ```
 
-A partir de aquí, todos los comandos de instalación y ejecución usan el `python` del venv activado (verificable con `which python`).
+Desde aquí, todos los comandos de este README corren **con el venv activado**. Verifica que `python` apunta al del venv antes de continuar:
+
+```
+which python
+```
+
+La salida debe incluir la carpeta `venv/` (y no `/usr/bin/python`).
 
 ### 4. Configurar las variables de entorno
 
-```bash
+```
 cp .env.example .env
 ```
 
-El arranque lee el archivo `.env` de la raíz: `multibot.py` llama a `load_dotenv()` antes de importar `bot/config.py`, por lo que las variables se cargan siempre al arrancar. Rellena al menos los dos valores obligatorios (`BOT_TOKEN` y `GROQ_API_KEY`); si faltan, el bot aborta con `Error: falta la variable de entorno ...`.
+El programa **sí carga `.env` automáticamente** (`load_dotenv()` en `multibot.py` antes de importar `bot.config`). Edita `.env` y rellena al menos las dos obligatorias: `BOT_TOKEN` (token de @BotFather) y `GROQ_API_KEY` (clave de Groq, formato `gsk_...`). Si faltan, el bot aborta al arrancar con un mensaje claro. El resto de variables son opcionales; sus valores por defecto están en `bot/config.py` (ver tabla más abajo).
 
 ### 5. Instalar dependencias
 
-```bash
+```
 pip install -r requirements.txt
 ```
 
-Para correr la suite de tests, además:
+Para ejecutar la suite de tests, instala también las dependencias de desarrollo:
 
-```bash
+```
 pip install -r requirements-dev.txt
 ```
 
 ### 6. Ejecutar
 
-```bash
+```
 python multibot.py
 ```
 
-El bot levanta Flask en `http://0.0.0.0:7860` (útil como health-check) y arranca el polling de Telegram. Cuando está listo imprime `Bot corriendo...`. El arranque solo falla por credenciales inválidas o falta de conexión con la API de Telegram.
-
-## Uso
-
-- **Descargar video/audio:** envía un enlace de TikTok, Instagram o Facebook. Los carruseles de Instagram y los slides de TikTok se envían como álbum de fotos.
-- **Buscar en SoundCloud:** `find <canción>`.
-- **Consulta enciclopédica:** `/wiki <consulta>`.
-
-## Variables de entorno
-
-| Variable | Obligatoria | Descripción |
-| --- | --- | --- |
-| `BOT_TOKEN` | sí | Token del bot de BotFather. El bot aborta si falta. |
-| `GROQ_API_KEY` | sí | Clave de Groq (formato `gsk-...`). El bot aborta si falta. |
-| `TIKWM_API_URL` | no | Endpoint de TikWM para slides de TikTok y fallbacks. Default: `https://www.tikwm.com/api/`. |
-| `BOT_API_BASE_URL` | no | Base URL de la API de Telegram (útil tras un proxy). Default: `https://multi-api-production.up.railway.app/bot`. |
-| `IG_SESSION` | no | Ruta de sesión de Instaloader. Default: `ig_session`. |
-| `GROQ_MODEL` | no | Modelo de Groq para `/wiki`. Default: `llama-3.3-70b-versatile`. |
-| `GROQ_TEMPERATURE` | no | Temperatura de las respuestas de Groq. Default: `0.3`. |
-| `GROQ_MAX_TOKENS` | no | Límite de tokens de respuesta de Groq. Default: `500`. |
+El bot hace polling a Telegram y levanta el servidor HTTP interno en `http://0.0.0.0:7860` (también accesible vía `http://localhost:7860`). Al arrancar, verifica el token con una llamada a `getMe`; si es inválido, aborta con un error de Telegram.
 
 ## Tests
 
-```bash
+```
 pytest
 ```
 
-La suite aísla la red y los archivos temporales (fixtures en `tests/conftest.py`). Los tests que requieren FFmpeg se saltan automáticamente si el binario no está disponible.
+Runs the full suite (27 tests): handlers, pipeline de video con FFmpeg real, carrusel/slides con mocks, wiki con cliente Groq simulado y fail-fast de configuración. Los tests que requieren FFmpeg se saltan si los binarios no están disponibles.
+
+## Docker
+
+El repo incluye un `Dockerfile` (imagen `python:3.11-slim`, usuario no root `app`, instala `ffmpeg`):
+
+```
+docker build -t multibot .
+docker run --env-file .env multibot
+```
+
+Las variables se pasan con `--env-file .env` (mismo formato que el paso 4). El contexto de build excluye credenciales, descargas y documentación (`.dockerignore`).
+
+## Variables de entorno
+
+| Variable | Requerida | Default | Descripción |
+| --- | --- | --- | --- |
+| `BOT_TOKEN` | sí | — | Token del bot, de @BotFather. Sin ella el bot aborta |
+| `GROQ_API_KEY` | sí | — | API key de Groq (`gsk_...`). Sin ella el bot aborta |
+| `BOT_API_BASE_URL` | no | `https://api.telegram.org/bot` | Base URL de la API de Telegram (útil tras un proxy de Telegram; debe terminar en `bot` + token) |
+| `TIKWM_API_URL` | no | `https://www.tikwm.com/api/` | API TikWM (slides de TikTok y fallbacks de audio) |
+| `IG_SESSION` | no | `ig_session` | Ruta del archivo de sesión de Instaloader |
+| `GROQ_MODEL` | no | `llama-3.3-70b-versatile` | Modelo Groq para `/wiki` |
+| `GROQ_TEMPERATURE` | no | `0.3` | Temperatura de las respuestas de Groq |
+| `GROQ_MAX_TOKENS` | no | `500` | Límite de tokens de respuesta de Groq |
+
+> **`BOT_API_BASE_URL` (corregido 2026-08-09):** el default anterior (`https://multi-api-production.up.railway.app/bot`) generaba `…/bot<TOKEN>/getMe`, ruta que ese gateway no enruta (404 con tokens válidos). El default ahora es el oficial `https://api.telegram.org/bot` (verificado: smoke test → 401 con token falso, URL bien formada). Nota: ese gateway railway es incompatible con `python-telegram-bot`: con `/bot` responde 404 y sin el sufijo `/bot` la librería rechaza la URL (`InvalidURL: Invalid port`). Si usas un proxy, debe enrutar `bot<TOKEN>/<método>` como la API oficial.
 
 ## Troubleshooting
 
-| Error | Causa | Solución |
+| Error (mensaje literal) | Causa | Solución |
 | --- | --- | --- |
-| `RuntimeError: There is no current event loop` al arrancar | `python-telegram-bot` `<22.0` (no compatible con Python 3.12+/3.14) | `pip install -U "python-telegram-bot>=22.0,<23.0"` |
-| `Error: falta la variable de entorno BOT_TOKEN` / `GROQ_API_KEY` | `.env` vacío, no copiado o valores en blanco | Copiar `.env.example` a `.env` y rellenar los valores (paso 4) |
-| `ModuleNotFoundError: No module named 'telegram'` | Paquete `python-telegram-bot` no instalado, o se está usando el intérprete del sistema sin venv | Activar el venv (`source venv/bin/activate`) o usar `venv/bin/python multibot.py` |
-| `error: externally-managed-environment` (PEP 668) | pip del sistema bloqueado en Debian/Ubuntu | Usar el venv del paso 3, nunca `pip` global |
-| Fallos de audio / `ffmpeg not found` | Binarios `ffmpeg`/`ffprobe` ausentes | Instalar FFmpeg según tu SO (paso 1) |
+| `Error: falta la variable de entorno BOT_TOKEN` / `Error: falta la variable de entorno GROQ_API_KEY` | variable no rellenada; el bot hace fail-fast en `multibot.py` | rellenar `.env` (paso 4) o exportar la variable antes de ejecutar |
+| `HTTP Request: POST https://…/bot<TOKEN>/getMe "HTTP/1.1 404 Not Found"` seguido de `telegram.error.InvalidToken: The token '<TOKEN>' was rejected by the server.` y `Network Retry Loop (Bootstrap Initialize Application): Invalid token. Aborting retry loop.` | (a) token inválido/vencido (la API oficial responde `401 Unauthorized`); (b) `BOT_API_BASE_URL` apuntando a un proxy cuyo enrutamiento no acepta `bot<TOKEN>/<método>` | revisar el token; usar un proxy compatible con la ruta `bot<TOKEN>/<método>` (el default oficial ya funciona) |
+| `telegram.error.NetworkError: Unknown error in HTTP implementation: InvalidURL("Invalid port: 'TEST'")` | `BOT_API_BASE_URL` sin prefijo `bot` antes del token (p. ej. el gateway railway sin `/bot`): el `:` del token rompe el parseo de URL de httpx | usar `https://api.telegram.org/bot` u otra URL que termine en `bot` (el token va pegado después) |
+| `ModuleNotFoundError: No module named 'telegram'` | el paquete instalable es `python-telegram-bot`, pero el import es `telegram`; el error aparece al usar el intérprete equivocado o sin venv activado | activar el venv (`source venv/bin/activate`) o ejecutar con `venv/bin/python multibot.py`; reinstalar con `pip install -r requirements.txt` |
+| `error: externally-managed-environment` (pip rechaza la instalación) | PEP 668: el Python del sistema bloquea `pip install` fuera de venv | usar el venv del paso 3; no instalar dependencias con el `pip` del sistema |
+| `RuntimeError: This event loop is already running` / problemas de asyncio al arrancar | runtime de Python más nuevo que el verificado con `python-telegram-bot` | usar Python 3.11–3.14 (rango verificado) o actualizar `python-telegram-bot` dentro del rango `>=22,<23` |
 
 > **Estructura del repositorio:** consultar [STRUCTURE.md](STRUCTURE.md).

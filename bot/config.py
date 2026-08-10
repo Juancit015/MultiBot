@@ -11,7 +11,7 @@ COOKIES_FB = Path(__file__).parent.parent / "cookiesFB.txt"
 LIMITE_MB  = 2000
 
 TIKWM_API_URL     = os.environ.get("TIKWM_API_URL", "https://www.tikwm.com/api/")
-BOT_API_BASE_URL  = os.environ.get("BOT_API_BASE_URL", "https://multi-api-production.up.railway.app/bot")
+BOT_API_BASE_URL  = os.environ.get("BOT_API_BASE_URL", "https://api.telegram.org/bot")
 IG_SESSION        = os.environ.get("IG_SESSION", "ig_session")
 GROQ_MODEL        = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_TEMPERATURE  = float(os.environ.get("GROQ_TEMPERATURE", "0.3"))
